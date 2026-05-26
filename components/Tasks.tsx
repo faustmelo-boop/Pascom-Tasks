@@ -152,7 +152,6 @@ export const Tasks: React.FC<TasksProps> = ({ tasks, users, currentUser, onRefre
       try {
           if (finalTaskId && formData.assigneeIds.length > 0) {
             const notificationsToInsert = formData.assigneeIds
-                .filter(id => id !== currentUser.id)
                 .map(userId => ({
                     user_id: userId,
                     type: 'task_assigned',

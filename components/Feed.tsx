@@ -106,7 +106,7 @@ const PostCard: React.FC<{
   };
 
   return (
-    <div className="bg-white rounded-[2.5rem] shadow-[0_20px_40px_-12px_rgba(0,0,0,0.06)] border border-slate-50 p-5 sm:p-8 mb-8 animate-in slide-in-from-bottom-5 duration-500 hover:shadow-[0_32px_64px_-12px_rgba(0,0,0,0.1)] transition-all group overflow-hidden relative">
+    <div className="bg-white rounded-[2.5rem] shadow-[0_20px_40px_-12px_rgba(0,0,0,0.06)] border border-slate-50 p-5 sm:p-8 hover:shadow-[0_32px_64px_-12px_rgba(0,0,0,0.1)] transition-all group overflow-hidden relative">
       {/* Visual Decoration */}
       <div className={`absolute top-0 left-0 w-2 h-full ${
         post.type === 'enquete' ? 'bg-brand-yellow' :
@@ -501,18 +501,46 @@ export const Feed: React.FC<FeedProps> = ({
             </div>
         ) : (
           <>
-            <div className={`${isDashboardIntegrated ? 'space-y-4 pb-2' : 'space-y-8 pb-12'}`}>
-              {filteredPosts.map((post) => (
-                <PostCard 
-                    key={post.id} 
-                    post={post} 
-                    users={users} 
-                    currentUser={currentUser} 
-                    onRefresh={onRefresh} 
-                    onRequestDelete={(p) => setPostToDelete(p)}
-                />
-              ))}
-            </div>
+            <motion.div 
+              layout="position"
+              className={`${isDashboardIntegrated ? 'space-y-4 pb-2' : 'space-y-8 pb-12'}`}
+            >
+              <AnimatePresence initial={false}>
+                {filteredPosts.map((post) => (
+                  <motion.div
+                    key={post.id}
+                    layout="position"
+                    initial={{ opacity: 0, height: 0, scale: 0.95 }}
+                    animate={{ 
+                      opacity: 1, 
+                      height: "auto", 
+                      scale: 1,
+                    }}
+                    exit={{ 
+                      opacity: 0, 
+                      height: 0, 
+                      scale: 0.95,
+                    }}
+                    transition={{
+                      type: "spring",
+                      stiffness: 250,
+                      damping: 26,
+                    }}
+                    style={{ overflow: "hidden" }}
+                  >
+                    <div className={isDashboardIntegrated ? "mb-1" : "mb-8"}>
+                      <PostCard 
+                          post={post} 
+                          users={users} 
+                          currentUser={currentUser} 
+                          onRefresh={onRefresh} 
+                          onRequestDelete={(p) => setPostToDelete(p)}
+                      />
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </motion.div>
             {/* NEW POST MODAL */}
             {createPortal(
               <AnimatePresence>

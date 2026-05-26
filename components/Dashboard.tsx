@@ -158,7 +158,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       <div className="lg:hidden flex flex-col gap-8">
         
         {/* 1. Feed Section (Input + Expandable Posts) */}
-        <div className="flex flex-col gap-1">
+        <motion.div layout className="flex flex-col gap-1">
           <div className="feed-container-integrated">
             <Feed 
               posts={[]} 
@@ -171,7 +171,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
 
           {posts.length > 0 && (
-            <div className="flex flex-col gap-1">
+            <motion.div layout className="flex flex-col gap-1">
               <div className="feed-container-integrated">
                 <Feed 
                   posts={isPostsExpanded ? posts : posts.slice(0, 1)} 
@@ -184,7 +184,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </div>
 
               {!isPostsExpanded && posts.length > 1 && (
-                <div className="px-4">
+                <motion.div layout className="px-4">
                   <button 
                     onClick={() => setIsPostsExpanded(true)}
                     className="w-full py-6 bg-white rounded-[2rem] border border-slate-100 text-slate-400 font-black text-[10px] uppercase tracking-[0.2em] hover:bg-slate-50 hover:text-brand-blue transition-all shadow-sm flex items-center justify-center gap-2 group"
@@ -192,11 +192,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     Mais Publicações
                     <Plus size={14} className="group-hover:rotate-90 transition-transform" />
                   </button>
-                </div>
+                </motion.div>
               )}
 
               {isPostsExpanded && (
-                <div className="px-4">
+                <motion.div layout className="px-4">
                   <button 
                     onClick={() => setIsPostsExpanded(false)}
                     className="w-full py-6 bg-white rounded-[2rem] border border-slate-100 text-slate-400 font-black text-[10px] uppercase tracking-[0.2em] hover:bg-slate-50 hover:text-brand-blue transition-all shadow-sm flex items-center justify-center gap-2 group"
@@ -204,11 +204,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     Ver menos
                     <X size={14} className="group-hover:rotate-90 transition-transform" />
                   </button>
-                </div>
+                </motion.div>
               )}
-            </div>
+            </motion.div>
           )}
-        </div>
+        </motion.div>
 
         {/* 2. Featured Image */}
         <motion.div 

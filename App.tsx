@@ -319,7 +319,7 @@ function App() {
             <motion.div
               animate={{ 
                 scale: isActive ? 1.1 : 1,
-                color: isActive ? '#4ade80' : 'currentColor' // brand-green
+                color: isActive ? '#4ade80' : 'rgba(255, 255, 255, 0.5)' // brand-green
               }}
               transition={{ type: "spring", stiffness: 300, damping: 20 }}
             >
