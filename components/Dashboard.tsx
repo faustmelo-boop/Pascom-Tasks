@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Post, Task, ScheduleEvent, User, FinancialTransaction, InventoryItem, Course, TaskStatus } from '../types';
 import { LayoutGrid, Calendar, CheckSquare, MessageSquare, DollarSign, Box, GraduationCap, ArrowUpRight, Clock, AlertCircle, ChevronRight, LayoutDashboard, Plus, Users, Sparkles, LayoutTemplate, Loader2, X, Circle, CheckCircle2, Check, Shield, Lock, Unlock, Copy, ExternalLink, Eye, EyeOff } from 'lucide-react';
 import { Feed } from './Feed';
@@ -127,6 +127,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
   const [isVaultExpanded, setIsVaultExpanded] = useState(false);
   const [isPostsExpanded, setIsPostsExpanded] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('post')) {
+      setIsPostsExpanded(true);
+    }
+  }, []);
 
   const pendingTasksCount = tasks.filter(t => t.status !== TaskStatus.DONE).length;
   const upcomingSchedules = schedules.filter(s => new Date(s.date) >= new Date()).slice(0, 3);

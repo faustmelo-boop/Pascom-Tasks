@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Post, User, UserRole, isCoordinator } from '../types';
 import { supabase } from '../supabaseClient';
-import { Plus, Trash2, Loader2, X, Image as ImageIcon, BarChart2, Megaphone, HeartHandshake, BookOpen, Camera, Send, AlertTriangle, Bold, Italic, Strikethrough, List, MoreVertical, Smile, Palette, MessageSquare } from 'lucide-react';
+import { Plus, Trash2, Loader2, X, Image as ImageIcon, BarChart2, Megaphone, HeartHandshake, BookOpen, Camera, Send, AlertTriangle, Bold, Italic, Strikethrough, List, MoreVertical, Smile, Palette, MessageSquare, Heart, Users, Share2, Link, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface FeedProps {
@@ -75,12 +75,108 @@ const PostCard: React.FC<{
 }> = ({ post, users, currentUser, onRefresh, onRequestDelete }) => {
   const author = users.find((u) => u.id === post.authorId);
   const [voteLoading, setVoteLoading] = useState(false);
+  const [likers, setLikers] = useState<{ id: string; name: string; avatar: string }[]>([]);
+  const [loadingLikes, setLoadingLikes] = useState(false);
+  const [showLikersModal, setShowLikersModal] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+  const isTargetPost = params.get('post') === post.id;
+
+  const handleShare = async () => {
+    const shareUrl = `${window.location.origin}${window.location.pathname}?post=${post.id}`;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Pascom - Post de ' + (author?.name || 'Mural'),
+          text: post.content.substring(0, 100),
+          url: shareUrl,
+        });
+        return;
+      } catch (err) {
+        console.log("Navigator share canceled/error, falling back to copy:", err);
+      }
+    }
+    
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Could not copy:", err);
+    }
+  };
   
   // Robust Admin Check unificado
   const isAdmin = currentUser && isCoordinator(currentUser.role);
 
   const isAuthor = post.authorId === currentUser.id;
   const canDelete = isAuthor || isAdmin;
+
+  const fetchLikers = async () => {
+    try {
+      setLoadingLikes(true);
+      const { data, error } = await supabase
+        .from('post_likes')
+        .select('user_id, profiles(id, name, avatar)')
+        .eq('post_id', post.id);
+
+      if (error) throw error;
+
+      const mappedLikers = (data || []).map((row: any) => ({
+        id: row.profiles?.id || row.user_id,
+        name: row.profiles?.name || 'Sem Nome',
+        avatar: row.profiles?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(row.profiles?.name || 'User')}&background=fdb615&color=fff`
+      }));
+
+      setLikers(mappedLikers);
+    } catch (err) {
+      console.error("Error fetching likers:", err);
+    } finally {
+      setLoadingLikes(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLikers();
+  }, [post.id]);
+
+  const likedByMe = likers.some(l => l.id === currentUser?.id);
+
+  const handleLikeToggle = async () => {
+    if (!currentUser) return;
+    try {
+      if (likedByMe) {
+        // Unlike
+        await supabase
+          .from('post_likes')
+          .delete()
+          .eq('post_id', post.id)
+          .eq('user_id', currentUser.id);
+        
+        const newLikesCount = Math.max(0, post.likes - 1);
+        await supabase
+          .from('posts')
+          .update({ likes: newLikesCount })
+          .eq('id', post.id);
+      } else {
+        // Like
+        await supabase
+          .from('post_likes')
+          .insert({ post_id: post.id, user_id: currentUser.id });
+        
+        const newLikesCount = post.likes + 1;
+        await supabase
+          .from('posts')
+          .update({ likes: newLikesCount })
+          .eq('id', post.id);
+      }
+      onRefresh();
+      fetchLikers();
+    } catch (e) {
+      console.error("Error inside handleLikeToggle:", e);
+    }
+  };
   
   const handleVote = async (optionId: string) => {
     if (!post.pollOptions || voteLoading) return;
@@ -106,7 +202,12 @@ const PostCard: React.FC<{
   };
 
   return (
-    <div className="bg-white rounded-[2.5rem] shadow-[0_20px_40px_-12px_rgba(0,0,0,0.06)] border border-slate-50 p-5 sm:p-8 hover:shadow-[0_32px_64px_-12px_rgba(0,0,0,0.1)] transition-all group overflow-hidden relative">
+    <div 
+      id={`post-${post.id}`}
+      className={`bg-white rounded-[2.5rem] shadow-[0_20px_40px_-12px_rgba(0,0,0,0.06)] border p-5 sm:p-8 hover:shadow-[0_32px_64px_-12px_rgba(0,0,0,0.1)] transition-all group overflow-hidden relative ${
+        isTargetPost ? 'border-brand-blue ring-4 ring-brand-blue/10 scale-[1.01]' : 'border-slate-50'
+      }`}
+    >
       {/* Visual Decoration */}
       <div className={`absolute top-0 left-0 w-2 h-full ${
         post.type === 'enquete' ? 'bg-brand-yellow' :
@@ -134,6 +235,14 @@ const PostCard: React.FC<{
               }`}>
                 {post.type === 'enquete' ? 'Enquete' : 'Publicação'}
               </span>
+              {isTargetPost && (
+                <>
+                  <div className="w-1 h-1 sm:w-1.5 sm:h-1.5 bg-slate-100 rounded-full"></div>
+                  <span className="text-[8px] sm:text-[9px] font-black uppercase tracking-[0.15em] sm:tracking-[0.2em] px-2 sm:px-3 py-1 rounded-full bg-brand-blue/10 text-brand-blue ring-1 ring-brand-blue/20 animate-pulse">
+                    Focado via Link
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -150,14 +259,18 @@ const PostCard: React.FC<{
       </div>
 
       {/* Content with Rich Text Rendering */}
-      <div className="mb-8 text-slate-700 text-base sm:text-lg leading-relaxed font-medium">
+      <div className="mb-6 text-slate-700 text-sm sm:text-base leading-relaxed font-normal">
         {renderStyledText(post.content)}
       </div>
 
       {post.image && (
-        <div className="mb-8 rounded-[2rem] overflow-hidden border-4 border-white shadow-2xl relative group/img">
-             <img src={post.image} alt="Post content" className="w-full max-h-[600px] object-cover transition-transform duration-700 group-hover/img:scale-105" />
-             <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover/img:opacity-100 transition-opacity"></div>
+        <div className="mb-6 rounded-[2.5rem] overflow-hidden border-4 border-white shadow-xl relative group/img bg-slate-50 flex items-center justify-center max-h-[485px]">
+             <img 
+               src={post.image} 
+               alt="Conteúdo da publicação" 
+               className="w-full h-full max-h-[480px] object-contain transition-transform duration-700 group-hover/img:scale-[1.02]" 
+             />
+             <div className="absolute inset-0 bg-black/5 opacity-0 group-hover/img:opacity-100 transition-opacity pointer-events-none"></div>
         </div>
       )}
 
@@ -199,6 +312,155 @@ const PostCard: React.FC<{
              <p className="text-sm font-black text-slate-900">{post.pollOptions.reduce((acc, c) => acc + c.votes, 0)}</p>
           </div>
         </div>
+      )}
+
+      {/* Interaction Row */}
+      <div className="flex items-center justify-between mt-6 pt-4 border-t border-slate-100 flex-wrap gap-4">
+        <div className="flex items-center gap-3">
+          <motion.button
+            whileTap={{ scale: 0.85 }}
+            onClick={handleLikeToggle}
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-black uppercase tracking-wider transition-all duration-300 ${
+              likedByMe 
+                ? 'bg-rose-50 text-rose-500 ring-2 ring-rose-100/50' 
+                : 'bg-slate-50 text-slate-400 hover:bg-slate-100 hover:text-slate-600 ring-1 ring-slate-100'
+            }`}
+          >
+            <Heart 
+              size={16} 
+              className={`transition-colors duration-300 ${likedByMe ? 'fill-rose-500 text-rose-500' : ''}`} 
+            />
+            {likedByMe ? 'Curtido' : 'Curtir'}
+          </motion.button>
+
+          {likers.length > 0 && (
+            <button
+              onClick={() => setShowLikersModal(true)}
+              className="flex items-center -space-x-2.5 hover:opacity-80 transition-all cursor-pointer bg-transparent border-none outline-none p-0"
+              title="Ver quem curtiu"
+            >
+              <div className="flex -space-x-2 mr-1">
+                {likers.slice(0, 3).map((liker, idx) => (
+                  <img
+                    key={liker.id}
+                    src={liker.avatar}
+                    alt={liker.name}
+                    className="w-8 h-8 rounded-full border-2 border-white object-cover ring-2 ring-slate-50 relative"
+                    style={{ zIndex: 10 - idx }}
+                  />
+                ))}
+              </div>
+              <span className="text-xs font-bold text-slate-500 ml-3 group-hover:text-brand-blue group-hover:underline transition-all whitespace-nowrap">
+                {likers.length === 1 ? (
+                  likedByMe ? 'Você curtiu' : `${likers[0].name.split(' ')[0]} curtiu`
+                ) : likers.length === 2 ? (
+                  likedByMe 
+                    ? `Você e ${likers.find(l => l.id !== currentUser.id)?.name.split(' ')[0]} curtiram` 
+                    : `${likers[0].name.split(' ')[0]} e ${likers[1].name.split(' ')[0]} curtiram`
+                ) : (
+                  likedByMe
+                    ? `Você e outras ${likers.length - 1} pessoas`
+                    : `${likers[0].name.split(' ')[0]} e outras ${likers.length - 1} pessoas`
+                )}
+              </span>
+            </button>
+          )}
+
+          {likers.length === 0 && (
+            <span className="text-xs font-bold text-slate-300 italic">
+              Nenhuma curtida ainda. Seja o primeiro!
+            </span>
+          )}
+        </div>
+
+        {/* Share Button */}
+        <motion.button
+          whileTap={{ scale: 0.85 }}
+          onClick={handleShare}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-black uppercase tracking-wider transition-all duration-300 ${
+            copied
+              ? 'bg-emerald-50 text-emerald-600 ring-2 ring-emerald-100/50 shadow-sm'
+              : 'bg-slate-50 text-slate-400 hover:bg-slate-100 hover:text-slate-600 ring-1 ring-slate-100/60'
+          }`}
+          title="Copiar link para compartilhar"
+        >
+          {copied ? <Check size={14} strokeWidth={2.5} /> : <Share2 size={14} strokeWidth={2.5} />}
+          {copied ? 'Copiado!' : 'Compartilhar'}
+        </motion.button>
+      </div>
+
+      {/* LIKERS MODAL */}
+      {createPortal(
+        <AnimatePresence>
+          {showLikersModal && (
+            <div className="fixed inset-0 z-[100000] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-slate-950/60 backdrop-blur-md"
+                onClick={() => setShowLikersModal(false)}
+              />
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                className="bg-white rounded-[2.5rem] shadow-2xl p-8 max-w-md w-full relative z-[100010] flex flex-col max-h-[80vh]"
+              >
+                <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-rose-50 text-rose-500 rounded-2xl flex items-center justify-center shadow-inner">
+                      <Heart size={20} className="fill-rose-500" />
+                    </div>
+                    <div className="text-left">
+                      <h3 className="text-xl font-black text-slate-900 tracking-tight leading-tight">Curtidas</h3>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mt-1">
+                        {likers.length} {likers.length === 1 ? 'pessoa' : 'pessoas'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowLikersModal(false)}
+                    className="p-2.5 bg-slate-50 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="overflow-y-auto flex-1 pr-1 space-y-4 max-h-[50vh] custom-scrollbar text-left">
+                  {likers.map((liker) => {
+                    const fullUser = users.find(u => u.id === liker.id);
+                    return (
+                      <div key={liker.id} className="flex items-center justify-between p-3 rounded-2xl hover:bg-slate-50 transition-all duration-300">
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <img
+                            src={liker.avatar}
+                            alt={liker.name}
+                            className="w-10 h-10 rounded-xl object-cover shadow-md border border-white"
+                          />
+                          <div className="min-w-0 text-left">
+                            <p className="font-extrabold text-sm text-slate-900 truncate tracking-tight">{liker.name}</p>
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-0.5">
+                              {fullUser?.role || 'Agente'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <button
+                  onClick={() => setShowLikersModal(false)}
+                  className="w-full mt-6 py-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95"
+                >
+                  Fechar
+                </button>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>,
+        document.body
       )}
     </div>
   );
@@ -259,6 +521,20 @@ export const Feed: React.FC<FeedProps> = ({
       }
     };
   }, [isCreateModalOpen, postToDelete]);
+
+  // Scroll to focused post via share link
+  useEffect(() => {
+    const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+    const postId = params.get('post');
+    if (postId && posts.length > 0) {
+      setTimeout(() => {
+        const element = document.getElementById(`post-${postId}`);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 600);
+    }
+  }, [posts]);
 
   const filteredPosts = posts;
 
@@ -450,7 +726,7 @@ export const Feed: React.FC<FeedProps> = ({
   ];
 
   return (
-    <div className={`${isDashboardIntegrated ? 'pb-2' : 'max-w-4xl mx-auto p-4 pb-20 lg:pb-8'} animate-in fade-in duration-700`}>
+    <div className={`${isDashboardIntegrated ? 'pb-2' : 'max-w-2xl mx-auto p-4 pb-20 lg:pb-8'} animate-in fade-in duration-700`}>
       {/* Main Feed Column */}
       <div className={isDashboardIntegrated ? 'space-y-4' : 'space-y-8'}>
         
