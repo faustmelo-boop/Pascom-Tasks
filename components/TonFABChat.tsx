@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, SendHorizontal, X, Sparkles, Calendar, ClipboardCheck, ArrowUpRight, Eraser, Key } from 'lucide-react';
+import { MessageSquare, SendHorizontal, X, Sparkles, Calendar, ClipboardCheck, ArrowUpRight, Eraser } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User, Task, ScheduleEvent } from '../types';
 import { GoogleGenAI } from '@google/genai';
@@ -94,11 +94,6 @@ export const TonFABChat: React.FC<TonFABChatProps> = ({ currentUser, tasks, sche
   const [isLoading, setIsLoading] = useState(false);
   const [showBadge, setShowBadge] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // Client-side Gemini API key states for static site hosting (GitHub Pages / Vercel fallback)
-  const [needsApiKey, setNeedsApiKey] = useState(false);
-  const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem("pascom_user_gemini_key") || "");
-  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
 
   // Auto-dismiss the helper preview bubble 3 seconds after page load
   useEffect(() => {
@@ -310,16 +305,14 @@ ${groundingContext}
 
     // 2. Client-side fallback if server fails
     if (!serverSuccess) {
-      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || localStorage.getItem("pascom_user_gemini_key");
+      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
       if (!apiKey) {
-        setNeedsApiKey(true);
-        setShowApiKeyInput(true);
         setIsLoading(false);
         setMessages(prev => [
           ...prev,
           {
             role: 'model',
-            content: `🔑 **Chave API do Gemini Necessária**\n\nComo esta versão está sendo executada em uma hospedagem estática (ex: GitHub Pages), precisamos de uma chave de API do Gemini para que o Ton possa te responder diretamente do seu navegador.\n\nPor favor, insira sua chave abaixo para continuar. Ela é salva com total segurança apenas localmente em seu próprio navegador.`
+            content: `⚠️ **Chave API do Gemini não configurada**\n\nComo esta versão está sendo executada em uma hospedagem estática (como o GitHub Pages) sem servidor ativo, o assistente necessita que a variável de ambiente \`VITE_GEMINI_API_KEY\` esteja configurada no ambiente de publicação para responder diretamente no seu navegador.`
           }
         ]);
         return;
@@ -482,16 +475,6 @@ ${groundingContext}
               
               <div className="flex items-center gap-1">
                 <button 
-                  onClick={() => {
-                    setShowApiKeyInput(!showApiKeyInput);
-                    setUserApiKey(localStorage.getItem("pascom_user_gemini_key") || "");
-                  }} 
-                  title="Configurar Chave API do Gemini" 
-                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${showApiKeyInput ? 'bg-white/20 text-white' : 'text-white/75 hover:text-white hover:bg-white/10'}`}
-                >
-                  <Key size={16} />
-                </button>
-                <button 
                   onClick={cleanConversation} 
                   title="Limpar Conversa" 
                   className="p-1.5 rounded-lg text-white/75 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
@@ -509,83 +492,6 @@ ${groundingContext}
 
             {/* Conversation Window Body */}
             <div className="flex-1 overflow-y-auto p-4 bg-slate-50/50 space-y-3.5">
-              {showApiKeyInput && (
-                <div className="p-4 bg-amber-50/90 backdrop-blur-xs rounded-2xl border border-amber-200/60 shadow-xs space-y-3 shrink-0">
-                  <div className="flex gap-2 items-start">
-                    <Key size={18} className="text-amber-600 mt-0.5" />
-                    <div className="flex-1">
-                      <h4 className="text-xs font-bold text-amber-900">Chave API do Gemini do Cliente</h4>
-                      <p className="text-[10px] text-amber-800 leading-normal mt-1">
-                        Para o Ton responder quando publicado no GitHub Pages / Vercel, use sua própria chave do Gemini. Ela é salva de forma segura apenas no seu navegador.
-                      </p>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <input
-                      type="password"
-                      value={userApiKey}
-                      onChange={(e) => setUserApiKey(e.target.value)}
-                      placeholder="Cole sua API Key aqui (AIzaSy...)"
-                      className="w-full bg-white border border-amber-200 text-xs py-2 px-3 rounded-xl focus:outline-hidden focus:border-amber-500 text-slate-800 placeholder-slate-400 font-mono"
-                    />
-                    <div className="flex justify-between items-center gap-2">
-                      <a 
-                        href="https://aistudio.google.com/" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-[10px] text-amber-700 font-bold hover:underline"
-                      >
-                        Obter chave grátis ↗
-                      </a>
-                      <div className="flex gap-2">
-                        {localStorage.getItem("pascom_user_gemini_key") && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              localStorage.removeItem("pascom_user_gemini_key");
-                              setUserApiKey("");
-                              setNeedsApiKey(false);
-                              setShowApiKeyInput(false);
-                              setMessages(prev => [
-                                ...prev,
-                                {
-                                  role: 'model',
-                                  content: `🗑️ **Chave de API removida.** O Ton agora tentará utilizar o servidor padrão.`
-                                }
-                              ]);
-                            }}
-                            className="px-2.5 py-1.5 text-[10px] font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition-all"
-                          >
-                            Remover
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (userApiKey.trim()) {
-                              localStorage.setItem("pascom_user_gemini_key", userApiKey.trim());
-                              setNeedsApiKey(false);
-                              setShowApiKeyInput(false);
-                              setMessages(prev => [
-                                ...prev,
-                                {
-                                  role: 'model',
-                                  content: `✅ **Chave de API configurada com sucesso!** Agora o Ton responderá usando sua chave direto no navegador.`
-                                }
-                              ]);
-                            }
-                          }}
-                          className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all"
-                        >
-                          Salvar
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {messages.map((m, idx) => {
                 const isUser = m.role === 'user';
                 return (
