@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { ScheduleEvent, User, UserRole, isCoordinator } from "../types";
 import { supabase } from "../supabaseClient";
+import { lmsService } from "../lmsService";
 import {
   Calendar as CalendarIcon,
   User as UserIcon,
@@ -19,6 +20,7 @@ import {
   ThumbsDown,
   MessageSquare,
   ChevronRight,
+  ChevronLeft,
   CalendarDays,
   ExternalLink,
 } from "lucide-react";
@@ -64,6 +66,7 @@ export const Schedules: React.FC<SchedulesProps> = ({
   const [unavailableDate, setUnavailableDate] = useState(
     new Date().toISOString().split("T")[0],
   );
+  const [calendarDate, setCalendarDate] = useState<Date>(() => new Date());
 
   // Delete States
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -136,6 +139,37 @@ export const Schedules: React.FC<SchedulesProps> = ({
 
   const getUser = (id?: string | null) => users.find((u) => u.id === id);
 
+  // --- Calendar state and helper derivations ---
+  const calendarYear = calendarDate.getFullYear();
+  const calendarMonth = calendarDate.getMonth();
+  const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+  const firstDayOfWeek = new Date(calendarYear, calendarMonth, 1).getDay();
+
+  const daysGrid: (number | null)[] = [];
+  for (let i = 0; i < firstDayOfWeek; i++) {
+    daysGrid.push(null);
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    daysGrid.push(d);
+  }
+
+  const weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  const monthNamesStr = [
+    "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+  ];
+  const currentMonthUnavailable = (currentUser.unavailableDates || [])
+    .filter((d) => d?.startsWith(`${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`))
+    .sort();
+
+  const handlePrevMonth = () => {
+    setCalendarDate(new Date(calendarYear, calendarMonth - 1, 1));
+  };
+
+  const handleNextMonth = () => {
+    setCalendarDate(new Date(calendarYear, calendarMonth + 1, 1));
+  };
+
   // --- Handlers ---
 
   const handleOpenModal = (schedule?: ScheduleEvent, e?: React.MouseEvent) => {
@@ -146,7 +180,7 @@ export const Schedules: React.FC<SchedulesProps> = ({
       setEditingId(schedule.id);
 
       // Map existing roles to assignment rows
-      const existingAssignments: AssignmentRow[] = schedule.roles.map((r) => ({
+      const existingAssignments: AssignmentRow[] = (schedule.roles || []).map((r) => ({
         userId: r.assignedUserId || "",
         role: r.roleName,
       }));
@@ -433,6 +467,10 @@ export const Schedules: React.FC<SchedulesProps> = ({
         .eq("id", schedule.id);
 
       if (error) throw error;
+
+      if (currentUser) {
+        await lmsService.earnXP(currentUser.id, 100);
+      }
       onRefresh();
     } catch (e: any) {
       alert(`Erro ao confirmar: ${e.message}`);
@@ -551,59 +589,38 @@ export const Schedules: React.FC<SchedulesProps> = ({
     }
   };
 
-  const handleReportAvailability = async () => {
-    if (!unavailableDate) return;
+  const handleToggleAvailabilityDate = async (dateStr: string) => {
     setLoading(true);
     try {
       const currentUnavailable = currentUser.unavailableDates || [];
-      if (currentUnavailable.includes(unavailableDate)) {
-        alert("Você já marcou este dia como indisponível.");
-        setLoading(false);
-        return;
+      let newUnavailableDates: string[];
+      
+      const isAlreadyUnavailable = currentUnavailable.includes(dateStr);
+      if (isAlreadyUnavailable) {
+        newUnavailableDates = currentUnavailable.filter((d) => d !== dateStr);
+      } else {
+        newUnavailableDates = [...currentUnavailable, dateStr];
       }
 
-      const newUnavailableDates = [...currentUnavailable, unavailableDate];
-      // Reconstruct full skills list for database: existing skills + all unavailable dates
+      // Reconstruct full skills list for database: existing skills + all badges + all unavailable dates
+      const badgeTags = (currentUser.rawSkills || []).filter(s => s.startsWith('[BADGE:'));
       const newSkills = [
         ...(currentUser.skills || []),
+        ...badgeTags,
         ...newUnavailableDates.map((d) => `[DISP:${d}]`),
       ];
 
-      // Update profiles with the complete re-constructed skills array
       const { error } = await supabase
         .from("profiles")
         .update({ skills: newSkills })
         .eq("id", currentUser.id);
+        
       if (error) throw error;
-
       onRefresh();
-      setAvailabilityModalOpen(false);
     } catch (e: any) {
-      alert(`Erro ao salvar disponibilidade: ${e.message}`);
+      alert(`Erro ao atualizar disponibilidade: ${e.message}`);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleRemoveAvailability = async (date: string) => {
-    try {
-      const newUnavailableDates = (currentUser.unavailableDates || []).filter(
-        (d) => d !== date,
-      );
-      // Reconstruct full skills list for database
-      const newSkills = [
-        ...(currentUser.skills || []),
-        ...newUnavailableDates.map((d) => `[DISP:${d}]`),
-      ];
-
-      const { error } = await supabase
-        .from("profiles")
-        .update({ skills: newSkills })
-        .eq("id", currentUser.id);
-      if (error) throw error;
-      onRefresh();
-    } catch (e: any) {
-      alert(`Erro ao remover: ${e.message}`);
     }
   };
 
@@ -766,7 +783,7 @@ export const Schedules: React.FC<SchedulesProps> = ({
               Equipe Escalada
             </h4>
             <div className="flex -space-x-1.5 shrink-0">
-              {event.roles.slice(0, 4).map((r, i) => {
+              {(event.roles || []).slice(0, 4).map((r, i) => {
                 const u = getUser(r.assignedUserId);
                 return u ? (
                   <img
@@ -780,20 +797,43 @@ export const Schedules: React.FC<SchedulesProps> = ({
             </div>
           </div>
 
-          <div className="space-y-2">
-            {event.roles.map((role, idx) => {
-              const agent = getUser(role.assignedUserId);
-              const isAssignedToMe = role.assignedUserId === currentUser.id;
-              const status = role.status || "pending";
-              const isDeclined = status === "declined";
-              const isConfirmed = status === "confirmed";
-              const isLoading = roleLoading === `${event.id}-${idx}`;
-
-              return (
-                <div
-                  key={idx}
-                  className={`p-3.5 sm:p-4 rounded-xl border transition-all duration-300 ${isAssignedToMe ? "bg-brand-blue/[0.03] border-brand-blue/20 ring-4 ring-brand-blue/5" : isDeclined ? "bg-rose-50/30 border-rose-100/50 opacity-60" : "bg-white border-slate-50 hover:border-slate-200"}`}
+          {(!event.roles || event.roles.length === 0) ? (
+            <div className="p-5 bg-amber-50/50 border border-dashed border-amber-200 rounded-3xl text-center space-y-3">
+              <div className="flex justify-center text-amber-500">
+                <AlertTriangle size={20} />
+              </div>
+              <div>
+                <h4 className="text-xs font-black text-amber-800 leading-none mb-1">
+                  Sugestão de Escala de Evento
+                </h4>
+                <p className="text-[10px] text-amber-700/80 font-bold leading-normal">
+                  Este compromisso veio da Agenda da Paróquia. Defina a equipe que atuará neste dia!
+                </p>
+              </div>
+              {isAdmin && (
+                <button
+                  onClick={(e) => handleOpenModal(event, e)}
+                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white rounded-xl font-bold text-[9px] uppercase tracking-widest shadow-md transition-all flex items-center justify-center gap-2"
                 >
+                  <Plus size={12} strokeWidth={3} /> Configurar Escala
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {(event.roles || []).map((role, idx) => {
+                const agent = getUser(role.assignedUserId);
+                const isAssignedToMe = role.assignedUserId === currentUser.id;
+                const status = role.status || "pending";
+                const isDeclined = status === "declined";
+                const isConfirmed = status === "confirmed";
+                const isLoading = roleLoading === `${event.id}-${idx}`;
+
+                return (
+                  <div
+                    key={idx}
+                    className={`p-3.5 sm:p-4 rounded-xl border transition-all duration-300 ${isAssignedToMe ? "bg-brand-blue/[0.03] border-brand-blue/20 ring-4 ring-brand-blue/5" : isDeclined ? "bg-rose-50/30 border-rose-100/50 opacity-60" : "bg-white border-slate-50 hover:border-slate-200"}`}
+                  >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
                       <div
@@ -902,10 +942,11 @@ export const Schedules: React.FC<SchedulesProps> = ({
               );
             })}
           </div>
-        </div>
-      </motion.div>
-    );
-  };
+        )}
+      </div>
+    </motion.div>
+  );
+};
 
   const displayedSchedules = schedules.filter((s) => {
     const isArchived = s.title.startsWith("[ARCHIVED] ");
@@ -1060,7 +1101,7 @@ export const Schedules: React.FC<SchedulesProps> = ({
                     : idx === 0;
 
                 const isUserScheduledOnThisDay = grouped[date].some((event) =>
-                  event.roles.some(
+                  (event.roles || []).some(
                     (r) =>
                       r.assignedUserId === currentUser.id &&
                       r.status !== "declined",
@@ -1637,124 +1678,181 @@ export const Schedules: React.FC<SchedulesProps> = ({
           )}
 
           {availabilityModalOpen && (
-            <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+            <div id="availability-modal" className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 bg-slate-950/60 backdrop-blur-xl"
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
                 onClick={() => setAvailabilityModalOpen(false)}
               />
               <motion.div
-                initial={{ scale: 0.95, opacity: 0, y: 30 }}
+                initial={{ scale: 0.95, opacity: 0, y: 15 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.95, opacity: 0, y: 30 }}
-                className="bg-white rounded-[3rem] w-full max-w-xl shadow-2xl overflow-hidden relative z-[1010] flex flex-col"
+                exit={{ scale: 0.95, opacity: 0, y: 15 }}
+                className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden relative z-[1010] flex flex-col max-h-[90vh]"
               >
-                <div className="px-10 py-10 border-b border-slate-50 flex justify-between items-center bg-brand-green relative group/avail">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
-                  <div className="flex items-center gap-5 relative z-10">
-                    <div className="w-14 h-14 bg-white/10 backdrop-blur-md text-white rounded-2xl flex items-center justify-center transition-transform border border-white/10 group-hover/avail:rotate-6 duration-500 shadow-lg">
-                      <CalendarDays size={28} />
+                {/* Modal Header */}
+                <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center bg-brand-green relative group/avail">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 rounded-full -mr-12 -mt-12 pointer-events-none" />
+                  <div className="flex items-center gap-3.5 relative z-10">
+                    <div className="w-10 h-10 bg-white/10 backdrop-blur-md text-white rounded-xl flex items-center justify-center border border-white/10 shadow-md">
+                      <CalendarDays size={20} />
                     </div>
-                    <div>
-                      <h3 className="text-2xl font-black text-white tracking-tight leading-none mb-1">
+                    <div className="text-left">
+                      <h3 className="text-lg font-black text-white tracking-tight leading-none mb-1">
                         Minha Disponibilidade
                       </h3>
-                      <p className="text-[10px] font-black text-white/40 uppercase tracking-widest">
-                        Datas fora do fluxo de trabalho
+                      <p className="text-[9px] font-semibold text-white/50 uppercase tracking-wider">
+                        Altere sua escala de folgas abaixo
                       </p>
                     </div>
                   </div>
                   <button
                     onClick={() => setAvailabilityModalOpen(false)}
-                    className="p-4 bg-white/10 text-white/50 hover:text-white rounded-[1.5rem] border border-white/5 backdrop-blur-md transition-all active:scale-90 relative z-10"
+                    className="p-2 bg-white/10 hover:bg-white/20 text-white/70 hover:text-white rounded-xl backdrop-blur-md transition-all active:scale-90 relative z-10"
+                    id="close-availability-header"
                   >
-                    <X size={20} strokeWidth={3} />
+                    <X size={16} strokeWidth={2.5} />
                   </button>
                 </div>
 
-                <div className="p-6 sm:p-10 space-y-8 overflow-y-auto max-h-[60vh] hide-scroll">
-                  <div className="space-y-4">
-                    <p className="text-xs font-bold text-slate-500 leading-relaxed italic border-l-4 border-brand-green pl-4">
-                      Datas marcadas alertam a coordenação sobre sua folga.
+                {/* Modal Body */}
+                <div className="p-4 sm:p-5 space-y-4 overflow-y-auto max-h-[75vh] hide-scroll">
+                  
+                  {/* Instructional Header & Legend Integrated */}
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-center">
+                    <p className="text-[11px] font-medium text-slate-500 leading-normal">
+                      Toque nos dias para alternar: <span className="text-blue-600 font-bold">Azul = Livre</span> | <span className="text-rose-500 font-bold">Vermelho = Folga</span>
                     </p>
+                  </div>
 
-                    <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                      <input
-                        type="date"
-                        value={unavailableDate}
-                        onChange={(e) => setUnavailableDate(e.target.value)}
-                        className="flex-1 bg-slate-50 border border-slate-200 px-5 py-4 rounded-2xl font-bold text-sm outline-none focus:ring-4 focus:ring-brand-green/5 focus:border-brand-green transition-all"
-                      />
+                  {/* Month Navigator Header */}
+                  <div className="flex items-center justify-between px-1">
+                    <div className="flex flex-col text-left">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Mês Selecionado</span>
+                      <h4 className="text-base font-black text-slate-800 tracking-tight capitalize leading-none mt-0.5">
+                        {monthNamesStr[calendarMonth]} {calendarYear}
+                      </h4>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                       <button
-                        onClick={handleReportAvailability}
-                        disabled={loading}
-                        className="bg-brand-green text-white px-6 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-brand-green/10 active:scale-95 transition-all flex items-center justify-center gap-2"
+                        onClick={handlePrevMonth}
+                        className="p-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg transition-all border border-slate-100 active:scale-95"
+                        id="btn-prev-month"
+                        title="Mês Anterior"
                       >
-                        {loading ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : (
-                          <Plus size={16} strokeWidth={3} />
-                        )}{" "}
-                        Adicionar
+                        <ChevronLeft size={16} strokeWidth={2.5} />
+                      </button>
+                      <button
+                        onClick={handleNextMonth}
+                        className="p-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg transition-all border border-slate-100 active:scale-95"
+                        id="btn-next-month"
+                        title="Próximo Mês"
+                      >
+                        <ChevronRight size={16} strokeWidth={2.5} />
                       </button>
                     </div>
                   </div>
 
-                  <div className="space-y-4">
-                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                      Suas Folgas
-                    </h4>
-
-                    <div className="grid grid-cols-1 gap-3">
-                      <AnimatePresence mode="popLayout">
-                        {currentUser.unavailableDates?.map((date) => (
-                          <motion.div
-                            key={date}
-                            layout
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, x: -20 }}
-                            className="flex items-center justify-between bg-white p-4 rounded-2xl border border-slate-100 group/date hover:border-brand-green/20 transition-all"
-                          >
-                            <div className="flex items-center gap-3">
-                              <CalendarIcon
-                                size={14}
-                                className="text-brand-green/50"
-                              />
-                              <span className="text-sm font-black text-slate-700">
-                                {new Date(
-                                  date + "T00:00:00",
-                                ).toLocaleDateString("pt-BR")}
-                              </span>
-                            </div>
-                            <button
-                              onClick={() => handleRemoveAvailability(date)}
-                              className="p-2 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-500 hover:text-white transition-all shadow-sm"
-                              aria-label="Remover"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </motion.div>
-                        ))}
-                      </AnimatePresence>
-                      {(!currentUser.unavailableDates ||
-                        currentUser.unavailableDates.length === 0) && (
-                        <div className="py-10 flex flex-col items-center justify-center text-slate-300 bg-slate-50/50 border-2 border-dashed border-slate-100 rounded-[2.5rem]">
-                          <p className="text-[10px] uppercase font-black tracking-widest opacity-40">
-                            Nenhuma data marcada
-                          </p>
+                  {/* Calendar Grid Container */}
+                  <div className="border border-slate-100 rounded-2xl p-3 bg-white relative">
+                    {loading && (
+                      <div className="absolute inset-0 bg-white/70 backdrop-blur-sm z-50 flex items-center justify-center rounded-2xl">
+                        <div className="flex flex-col items-center gap-1">
+                          <Loader2 size={24} className="text-brand-green animate-spin" />
+                          <span className="text-[10px] font-bold text-slate-500 animate-pulse">Sincronizando...</span>
                         </div>
-                      )}
+                      </div>
+                    )}
+                    
+                    <div className="grid grid-cols-7 gap-y-2 gap-x-1 text-center">
+                      {/* Weekday Labels */}
+                      {weekdays.map((w, index) => (
+                        <div key={index} className="text-[9px] font-black text-slate-400 uppercase tracking-wider pb-0.5">
+                          {w}
+                        </div>
+                      ))}
+
+                      {/* Calendar Day Cells */}
+                      {daysGrid.map((day, idx) => {
+                        if (day === null) {
+                          return <div key={`empty-${idx}`} className="w-8 h-8 sm:w-9 sm:h-9" />;
+                        }
+
+                        const formattedMonthStr = String(calendarMonth + 1).padStart(2, '0');
+                        const formattedDayStr = String(day).padStart(2, '0');
+                        const cellDateStr = `${calendarYear}-${formattedMonthStr}-${formattedDayStr}`;
+                        const isUnavailable = currentUser.unavailableDates?.includes(cellDateStr);
+
+                        return (
+                          <div key={`day-${day}`} className="flex justify-center items-center">
+                            <motion.button
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              disabled={loading}
+                              onClick={() => handleToggleAvailabilityDate(cellDateStr)}
+                              className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex flex-col items-center justify-center font-bold text-xs transition-all relative ${
+                                isUnavailable
+                                  ? 'bg-rose-500 hover:bg-rose-600 text-white shadow-sm'
+                                  : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm'
+                              }`}
+                              title={isUnavailable ? `Indisponível em ${day}/${formattedMonthStr}` : `Livre em ${day}/${formattedMonthStr}`}
+                              id={`avail-btn-${cellDateStr}`}
+                            >
+                              {day}
+                            </motion.button>
+                          </div>
+                        );
+                      })}
                     </div>
+                  </div>
+
+                  {/* Summary of marked days for active Month */}
+                  <div className="space-y-2">
+                    <h5 className="text-[9px] font-black text-slate-400 uppercase tracking-widest text-left">
+                      Suas Folgas em {monthNamesStr[calendarMonth]} ({currentMonthUnavailable.length})
+                    </h5>
+
+                    {currentMonthUnavailable.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5 max-h-[75px] overflow-y-auto pr-1">
+                        {currentMonthUnavailable.map((dateStr) => {
+                          const dStr = dateStr.split('-');
+                          const dayNum = parseInt(dStr[2], 10);
+                          return (
+                            <div
+                              key={dateStr}
+                              className="flex items-center gap-1.5 bg-rose-50 border border-rose-100 text-[10px] font-bold text-rose-600 px-2.5 py-1 rounded-full text-left"
+                            >
+                              <span>Dia {dayNum}</span>
+                              <button
+                                onClick={() => handleToggleAvailabilityDate(dateStr)}
+                                disabled={loading}
+                                className="hover:text-rose-800 transition-colors font-extrabold text-xs leading-none shrink-0"
+                                title="Mudar para Livre (Azul)"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="py-2.5 flex flex-col items-center justify-center text-slate-300 bg-slate-50/50 border border-dashed border-slate-150 rounded-xl">
+                        <p className="text-[9px] uppercase font-bold tracking-widest opacity-40">
+                          Nenhuma folga neste mês
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="p-10 bg-slate-50/50 flex justify-end items-center border-t border-slate-100 rounded-b-[3rem]">
+                {/* Modal Footer */}
+                <div className="px-6 py-3.5 bg-slate-50/50 flex justify-end items-center border-t border-slate-100">
                   <button
                     onClick={() => setAvailabilityModalOpen(false)}
-                    className="bg-slate-900 text-white px-10 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-2xl shadow-slate-200 hover:scale-105 active:scale-95 transition-all"
+                    className="bg-slate-900 text-white px-5 py-2 rounded-xl font-bold text-[10px] uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-md"
+                    id="close-availability-btn"
                   >
                     Fechar Painel
                   </button>

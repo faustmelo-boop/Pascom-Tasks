@@ -1,10 +1,47 @@
 import React, { useState, useEffect } from 'react';
 import { Post, Task, ScheduleEvent, User, FinancialTransaction, InventoryItem, Course, TaskStatus } from '../types';
-import { LayoutGrid, Calendar, CheckSquare, MessageSquare, DollarSign, Box, GraduationCap, ArrowUpRight, Clock, AlertCircle, ChevronRight, LayoutDashboard, Plus, Users, Sparkles, LayoutTemplate, Loader2, X, Circle, CheckCircle2, Check, Shield, Lock, Unlock, Copy, ExternalLink, Eye, EyeOff } from 'lucide-react';
+import { LayoutGrid, Calendar, CheckSquare, MessageSquare, DollarSign, Box, GraduationCap, ArrowUpRight, Clock, AlertCircle, ChevronRight, LayoutDashboard, Plus, Users, Sparkles, LayoutTemplate, Loader2, X, Circle, CheckCircle2, Check, Shield, Lock, Unlock, Copy, ExternalLink, Eye, EyeOff, Cake, Gift } from 'lucide-react';
+import { lmsService } from '../lmsService';
 import { Feed } from './Feed';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../supabaseClient';
 import CryptoJS from 'crypto-js';
+
+const getNextBirthdays = (usersList: User[]) => {
+  if (!usersList || !usersList.length) return [];
+  const activeUsers = usersList.filter(u => String(u.role).toLowerCase() !== 'pendente' && u.birthday);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const list = activeUsers.map(u => {
+    const parts = u.birthday.split('-');
+    if (parts.length < 3) return null;
+    const birthMonth = parseInt(parts[1]) - 1;
+    const birthDay = parseInt(parts[2]);
+    
+    // Create birth date object this year
+    let nextBday = new Date(today.getFullYear(), birthMonth, birthDay);
+    
+    // If it was yesterday or earlier, set to next year
+    if (nextBday < today) {
+      nextBday.setFullYear(today.getFullYear() + 1);
+    }
+    
+    const diffTime = nextBday.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    return {
+      user: u,
+      daysRemaining: diffDays,
+      formattedDate: nextBday.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long' }),
+    };
+  }).filter((x): x is NonNullable<typeof x> => x !== null);
+
+  // Sort by remaining days ascending
+  list.sort((a, b) => a.daysRemaining - a.daysRemaining); // wait, let's make sure it is a.daysRemaining - b.daysRemaining!
+  list.sort((a, b) => a.daysRemaining - b.daysRemaining);
+  return list.slice(0, 4); // Top 4
+};
 
 const VAULT_KEY = 'pascom-santantonio-2025';
 
@@ -137,6 +174,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const pendingTasksCount = tasks.filter(t => t.status !== TaskStatus.DONE).length;
   const upcomingSchedules = schedules.filter(s => new Date(s.date) >= new Date()).slice(0, 3);
+  const upcomingBirthdays = getNextBirthdays(users);
 
   const toggleTaskCompletion = async (task: Task) => {
     try {
@@ -148,6 +186,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
         .eq('id', task.id);
       
       if (error) throw error;
+
+      if (newStatus === TaskStatus.DONE && currentUser) {
+        await lmsService.earnXP(currentUser.id, 100);
+      }
       
       // Success feedback could be added here
       onRefresh();
@@ -356,6 +398,66 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </div>
                 </div>
               )) : <p className="text-xs text-slate-400 italic font-medium">Nenhuma escala programada.</p>}
+            </div>
+          </motion.div>
+
+          {/* Próximos Aniversariantes */}
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="bento-card bg-rose-500/5 border border-rose-500/10 shadow-sm p-8 group hover:border-rose-500/30 transition-all"
+          >
+            <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-rose-500/10 text-rose-500 rounded-2xl flex items-center justify-center group-hover:bg-rose-500 group-hover:text-white transition-all shadow-sm">
+                  <Cake size={20} />
+                </div>
+                <h3 className="font-black text-slate-800 tracking-tight">Aniversariantes</h3>
+              </div>
+              <span className="text-[9px] font-black uppercase tracking-widest text-rose-500 bg-rose-500/10 px-2.5 py-1 rounded-full border border-rose-500/10">Próximos</span>
+            </div>
+
+            <div className="space-y-4">
+              {upcomingBirthdays.length > 0 ? upcomingBirthdays.map((item, idx) => {
+                const isToday = item.daysRemaining === 0 || item.daysRemaining === 365;
+                return (
+                  <motion.div 
+                    key={item.user.id}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.4 + (idx * 0.1) }}
+                    className={`flex items-center justify-between gap-3 p-2 rounded-2xl transition-all ${isToday ? 'bg-rose-500/10 border border-rose-500/20 shadow-sm shadow-rose-500/5 animate-pulse' : 'hover:bg-slate-50'}`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`w-10 h-10 rounded-xl overflow-hidden shrink-0 border ${isToday ? 'border-rose-500/30' : 'border-slate-100'}`}>
+                        <img 
+                          referrerPolicy="no-referrer"
+                          src={item.user.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150'} 
+                          alt={item.user.name} 
+                          className="w-full h-full object-cover" 
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-black text-slate-800 text-xs truncate leading-tight flex items-center gap-1.5 font-sans font-medium tracking-tight">
+                          {item.user.name}
+                          {isToday && <span className="inline-block w-1.5 h-1.5 rounded-full bg-rose-500" />}
+                        </h4>
+                        <p className="text-[10px] text-slate-400 font-bold leading-none mt-1">
+                          {isToday ? 'Aniversário hoje! 🎉' : item.daysRemaining === 1 ? 'Amanhã!' : `Em ${item.daysRemaining} dias`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right pr-1">
+                      <span className={`text-[10px] font-black uppercase tracking-wider ${isToday ? 'text-rose-600' : 'text-slate-500'}`}>
+                        {item.formattedDate.split(' de ')[0]} {item.formattedDate.split(' de ')[1]?.slice(0, 3)}
+                      </span>
+                    </div>
+                  </motion.div>
+                );
+              }) : (
+                <p className="text-xs text-slate-400 italic font-medium">Nenhum aniversário cadastrado.</p>
+              )}
             </div>
           </motion.div>
 
@@ -591,6 +693,66 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
 
           <p className="px-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.25em] mb-[-1rem]">Painel de Controle</p>
+
+          {/* Próximos Aniversariantes */}
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="bento-card bg-rose-500/5 border border-rose-500/10 shadow-sm p-8 group hover:border-rose-500/30 transition-all"
+          >
+            <div className="flex items-center justify-between mb-8">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-rose-500/10 text-rose-500 rounded-2xl flex items-center justify-center group-hover:bg-rose-500 group-hover:text-white transition-all shadow-sm">
+                  <Cake size={20} />
+                </div>
+                <h3 className="font-black text-slate-800 tracking-tight">Aniversariantes</h3>
+              </div>
+              <span className="text-[9px] font-black uppercase tracking-widest text-rose-500 bg-rose-500/10 px-2.5 py-1 rounded-full border border-rose-500/10">Próximos</span>
+            </div>
+
+            <div className="space-y-4">
+              {upcomingBirthdays.length > 0 ? upcomingBirthdays.map((item, idx) => {
+                const isToday = item.daysRemaining === 0 || item.daysRemaining === 365;
+                return (
+                  <motion.div 
+                    key={item.user.id}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.4 + (idx * 0.1) }}
+                    className={`flex items-center justify-between gap-3 p-2 rounded-2xl transition-all ${isToday ? 'bg-rose-500/10 border border-rose-500/20 shadow-sm shadow-rose-500/5 animate-pulse' : 'hover:bg-slate-50'}`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`w-10 h-10 rounded-xl overflow-hidden shrink-0 border ${isToday ? 'border-rose-500/30' : 'border-slate-100'}`}>
+                        <img 
+                          referrerPolicy="no-referrer"
+                          src={item.user.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150'} 
+                          alt={item.user.name} 
+                          className="w-full h-full object-cover" 
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-black text-slate-800 text-xs truncate leading-tight flex items-center gap-1.5 font-sans font-medium tracking-tight">
+                          {item.user.name}
+                          {isToday && <span className="inline-block w-1.5 h-1.5 rounded-full bg-rose-500" />}
+                        </h4>
+                        <p className="text-[10px] text-slate-400 font-bold leading-none mt-1">
+                          {isToday ? 'Aniversário hoje! 🎉' : item.daysRemaining === 1 ? 'Amanhã!' : `Em ${item.daysRemaining} dias`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right pr-1">
+                      <span className={`text-[10px] font-black uppercase tracking-wider ${isToday ? 'text-rose-600' : 'text-slate-500'}`}>
+                        {item.formattedDate.split(' de ')[0]} {item.formattedDate.split(' de ')[1]?.slice(0, 3)}
+                      </span>
+                    </div>
+                  </motion.div>
+                );
+              }) : (
+                <p className="text-xs text-slate-400 italic font-medium">Nenhum aniversário cadastrado.</p>
+              )}
+            </div>
+          </motion.div>
 
           {/* Próximas Escalas */}
           <motion.div 

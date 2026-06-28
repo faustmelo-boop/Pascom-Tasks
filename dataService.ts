@@ -2,22 +2,61 @@ import { supabase } from './supabaseClient';
 import { User, Post, Task, ScheduleEvent, Course, AppNotification, InventoryItem, FinancialAccount, FinancialCategory, FinancialProject, FinancialTransaction } from './types';
 
 export const fetchUsers = async (): Promise<User[]> => {
-  const { data, error } = await supabase.from('profiles').select('*');
-  if (error) throw error;
-  return (data || []).map((p: any) => {
+  const [profilesRes, coursesRes, lessonsRes, progressRes] = await Promise.all([
+    supabase.from('profiles').select('*'),
+    supabase.from('courses').select('*'),
+    supabase.from('lessons').select('id, course_id'),
+    supabase.from('user_progress').select('lesson_id, user_id')
+  ]);
+
+  if (profilesRes.error) throw profilesRes.error;
+  
+  const profiles = profilesRes.data || [];
+  const courses = coursesRes.data || [];
+  const lessons = lessonsRes.data || [];
+  const progressList = progressRes.data || [];
+
+  return profiles.map((p: any) => {
     const skills = p.skills || [];
+    
+    // Calculate badges dynamically based on course completions
+    const completedCategories = new Set<string>();
+    
+    courses.forEach((course: any) => {
+      const courseLessons = lessons.filter((l: any) => l.course_id === course.id);
+      if (courseLessons.length > 0) {
+        const completedLessonsCount = progressList.filter((up: any) => 
+          up.user_id === p.id && courseLessons.some((l: any) => l.id === up.lesson_id)
+        ).length;
+        
+        if (completedLessonsCount === courseLessons.length) {
+          const categorySlug = String(course.category || 'geral')
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9]/g, '');
+          completedCategories.add(categorySlug);
+        }
+      }
+    });
+
+    const computedBadges = Array.from(completedCategories);
+
     return {
       id: p.id,
       name: p.name ? p.name.split(' ').slice(0, 2).join(' ') : 'Sem Nome',
+      email: p.email || undefined,
       role: p.role,
       avatar: p.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(p.name || 'User')}&background=fdb615&color=fff`,
       birthday: p.birthday || p.birth_date || p.birthdate || p.data_nascimento || p.nascimento || p.aniversario || '',
-      skills: skills.filter((s: string) => !s.startsWith('[DISP:')),
+      skills: skills.filter((s: string) => !s.startsWith('[DISP:') && !s.startsWith('[BADGE:')),
       onboarding_completed: p.onboarding_completed ?? true, // Default to true for existing users
       unavailableDates: skills
         .filter((s: string) => s.startsWith('[DISP:'))
         .map((s: string) => s.match(/\[DISP:(.+?)\]/)?.[1])
-        .filter(Boolean) as string[]
+        .filter(Boolean) as string[],
+      badges: computedBadges,
+      rawSkills: skills
     };
   });
 };

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { AppNotification } from '../types';
-import { Bell, Check, Clock, Calendar, CheckSquare, MessageCircle, Info, X, Trash2, Smartphone, Inbox, MailOpen } from 'lucide-react';
+import { AppNotification, User } from '../types';
+import { Bell, Check, Clock, Calendar, CheckSquare, MessageCircle, Info, X, Trash2, Smartphone, Inbox, MailOpen, Settings, ChevronDown, ChevronUp, Sparkles, BellRing } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface NotificationsPanelProps {
@@ -11,6 +11,7 @@ interface NotificationsPanelProps {
   onMarkAllAsRead: () => void;
   onClearAll: () => void;
   onRequestSystemPermissions: () => void;
+  currentUser?: User | null;
 }
 
 export const NotificationsPanel: React.FC<NotificationsPanelProps> = ({ 
@@ -20,7 +21,8 @@ export const NotificationsPanel: React.FC<NotificationsPanelProps> = ({
   onMarkAsRead,
   onMarkAllAsRead,
   onClearAll,
-  onRequestSystemPermissions
+  onRequestSystemPermissions,
+  currentUser
 }) => {
   const [permissionState, setPermissionState] = useState<NotificationPermission>('default');
   const [activeTab, setActiveTab] = useState<'all' | 'unread'>('unread');

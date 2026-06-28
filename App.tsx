@@ -24,17 +24,61 @@ import { FinancialPatrimony } from './components/FinancialPatrimony';
 import { Dashboard } from './components/Dashboard';
 import { LoadingScreen } from './components/LoadingScreen';
 import { OnboardingModal } from './components/OnboardingModal';
+import { lmsService } from './lmsService';
+import { CertificateView } from './components/lms/CertificateView';
+import { LMSCertificate } from './lmsTypes';
+import { Award } from 'lucide-react';
+import { TonFABChat } from './components/TonFABChat';
 
-type Tab = 'dashboard' | 'escalas' | 'tarefas' | 'ava' | 'agentes' | 'patrimonio' | 'tesouro' | 'perfil';
+type Tab = 'dashboard' | 'escalas' | 'tarefas' | 'ava' | 'agentes' | 'patrimonio' | 'tesouro' | 'perfil' | 'inscricoes';
 
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
+
+  // Shared AVA states to allow changing them from the Profile page
+  const [avaViewMode, setAvaViewMode] = useState<'student_dashboard' | 'classroom' | 'instructor_dashboard'>('student_dashboard');
+  const [avaActiveCourse, setAvaActiveCourse] = useState<Course | null>(null);
+
+  // Public verification tracker for scanned QR codes or verification links (Zero-Login Public Route)
+  const [publicVerifyId, setPublicVerifyId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('verify');
+    }
+    return null;
+  });
+  const [publicCertificate, setPublicCertificate] = useState<LMSCertificate | null>(null);
+  const [isPublicVerifying, setIsPublicVerifying] = useState(false);
+  const [publicVerifyError, setPublicVerifyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (publicVerifyId) {
+      const fetchPublicCertificate = async () => {
+        setIsPublicVerifying(true);
+        setPublicVerifyError(null);
+        try {
+          const cert = await lmsService.fetchCertificateByCode(publicVerifyId);
+          if (cert) {
+            setPublicCertificate(cert);
+          } else {
+            setPublicVerifyError('Código de certificado inválido ou não localizado em nossa base de credenciais.');
+          }
+        } catch (e) {
+          console.error(e);
+          setPublicVerifyError('Ocorreu um erro ao conectar com o validador de certificados.');
+        } finally {
+          setIsPublicVerifying(false);
+        }
+      };
+      fetchPublicCertificate();
+    }
+  }, [publicVerifyId]);
   
-  const [avaBreadcrumbs, setAvaBreadcrumbs] = useState<React.ReactNode | null>(null);
   
   // Application State managed by React Query
   const { data: users = [], isLoading: usersLoading } = useQuery({
@@ -74,6 +118,9 @@ function App() {
   });
 
   const currentUser = session ? users.find(u => u.id === session.user.id) || null : null;
+  if (currentUser && session?.user?.email) {
+    currentUser.email = session.user.email;
+  }
 
   const { data: courses = [], isLoading: coursesLoading } = useQuery({
     queryKey: ['courses', currentUser?.id],
@@ -142,6 +189,13 @@ function App() {
       }
     }
   }, []);
+
+  // Auto-detect and ask for browser notification permission on load
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      requestSystemNotificationPermission();
+    }
+  }, [requestSystemNotificationPermission]);
 
   const sendSystemNotification = async (title: string, body: string) => {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -241,7 +295,156 @@ function App() {
     queryClient.setQueryData(['notifications', session?.user.id], []);
   };
 
+  // Render high-fidelity client-agnostic public certificate validator (Bypasses logins/sessions for external verifiers, e.g., scanning QR codes)
+  if (publicVerifyId) {
+    return (
+      <div className="min-h-screen w-full bg-slate-100 flex items-center justify-center p-4 md:p-8 font-sans overflow-y-auto">
+        <div className="absolute inset-0 bg-gradient-to-br from-[#1b3a70]/10 via-slate-50/50 to-[#f1a80a]/5 -z-10" />
+        
+        <div className="w-full max-w-5xl bg-white shadow-2xl rounded-[3rem] border border-slate-100 overflow-hidden flex flex-col p-6 md:p-10 text-center relative animate-in zoom-in-95 duration-200">
+          <button 
+            onClick={() => {
+              setPublicVerifyId(null);
+              // Clear URL search param silently
+              const url = new URL(window.location.href);
+              url.searchParams.delete('verify');
+              window.history.replaceState({}, '', url.pathname + url.search);
+            }}
+            className="absolute top-6 right-6 p-2.5 rounded-full bg-slate-50 hover:bg-slate-100 transition-colors text-slate-400 hover:text-slate-800 cursor-pointer border border-slate-100 shadow-sm"
+            title="Voltar ao início de Pascom Tasks"
+          >
+            <X size={18} />
+          </button>
+
+          {isPublicVerifying ? (
+            <div className="py-24 text-center animate-in fade-in duration-300">
+              <Loader2 className="animate-spin text-[#1b3a70] mx-auto mb-4" size={40} />
+              <p className="text-sm font-black text-slate-500 uppercase tracking-widest animate-pulse">Validando Registro do Certificado...</p>
+              <p className="text-xs text-slate-400 mt-2">Segurança em conformidade com as diretrizes eclesiais Pascom</p>
+            </div>
+          ) : publicVerifyError ? (
+            <div className="py-16 text-center max-w-md mx-auto space-y-6">
+              <div className="w-16 h-16 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mx-auto shadow-inner border border-red-100">
+                <X size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-extrabold text-slate-800">Falha na Autenticação</h3>
+                <p className="text-slate-500 font-medium text-xs leading-relaxed">
+                  {publicVerifyError}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setPublicVerifyId(null);
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('verify');
+                  window.history.replaceState({}, '', url.pathname + url.search);
+                }}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs uppercase tracking-wider py-4 rounded-2xl cursor-pointer transition-all shadow-md active:scale-95"
+              >
+                Retornar ao Portal
+              </button>
+            </div>
+          ) : publicCertificate ? (
+            <div className="space-y-6 text-left animate-in fade-in duration-300">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-slate-100">
+                <div className="flex items-center gap-4">
+                  <div className="w-14 h-14 bg-green-50 text-green-600 rounded-[1.2rem] flex items-center justify-center border border-green-150 shadow-sm shrink-0">
+                    <Award size={30} />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
+                      Certificado Validado
+                      <span className="text-green-500 bg-green-50 border border-green-200 text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full">Oficial</span>
+                    </h3>
+                    <p className="text-sm text-slate-500 font-semibold mt-1">Este certificado de Conclusão de Curso Livre é autêntico e foi emitido de forma legítima.</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 bg-slate-50 border border-slate-150 px-4 py-2.5 rounded-2xl self-start md:self-auto font-mono text-[10px] text-slate-500">
+                  <span className="font-bold text-[#1b3a70]">Assinado com Chave Digital do Pároco</span>
+                </div>
+              </div>
+
+              <CertificateView 
+                certificate={publicCertificate} 
+                onClose={() => {
+                  setPublicVerifyId(null);
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('verify');
+                  window.history.replaceState({}, '', url.pathname + url.search);
+                }} 
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   if (!session) return <Login />;
+
+  // Se o usuário está pendente de aprovação, exibe a tela de bloqueio com feedback detalhado
+  if (currentUser && String(currentUser.role).toLowerCase() === 'pendente') {
+    return (
+      <div className="min-h-screen w-full bg-[#f8fafc] flex items-center justify-center font-sans overflow-hidden p-4 relative">
+        <div className="absolute inset-0 bg-gradient-to-br from-[#007cba]/5 via-slate-50 to-[#6cc04a]/5 -z-10" />
+        
+        <div className="w-full max-w-md bg-white shadow-2xl rounded-[3rem] border border-slate-100 overflow-hidden flex flex-col p-8 md:p-12 text-center relative animate-in zoom-in-95 duration-500">
+          <div className="mx-auto mb-8 relative">
+            <div className="w-20 h-20 bg-[#007cba]/10 rounded-[1.8rem] flex items-center justify-center text-[#007cba] border border-[#007cba]/15">
+              <Users size={36} />
+            </div>
+            <div className="absolute -bottom-1 -right-1 w-7 h-7 bg-amber-500 border-4 border-white rounded-xl flex items-center justify-center shadow-md">
+              <span className="text-white text-[10px] font-black leading-none animate-pulse">●</span>
+            </div>
+          </div>
+
+          <h2 className="text-3xl font-black text-slate-900 tracking-tight leading-tight">
+            Aguardando Aprovação
+          </h2>
+          
+          <p className="text-[10px] font-black text-[#007cba] uppercase tracking-[0.2em] bg-[#007cba]/10 px-4 py-1.5 rounded-full inline-block mt-4 mx-auto border border-[#007cba]/10">
+            Segurança & Controle de Acesso
+          </p>
+
+          <p className="text-slate-500 font-medium text-xs mt-6 leading-relaxed max-w-sm mx-auto">
+            Olá, <strong className="text-slate-800">{currentUser.name}</strong>! Para garantir que apenas pessoas ligadas à nossa pastoral tenham acesso aos dados internos e escalas da Pascom, seu cadastro precisa ser aprovado por um Coordenador.
+          </p>
+
+          <div className="my-8 p-6 bg-slate-50 rounded-2xl border border-slate-100 text-left space-y-4">
+            <h4 className="text-[10px] font-black text-slate-850 uppercase tracking-wider flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Próximos passos
+            </h4>
+            <ol className="text-xs text-slate-500 font-medium space-y-2 list-decimal list-inside pl-1 leading-relaxed">
+              <li>Aguarde o coordenador validar sua participação na pastoral.</li>
+              <li>O sistema se atualizará assim que seu perfil for aprovado.</li>
+              <li>Clique abaixo para recarregar ou saia para usar outra conta.</li>
+            </ol>
+          </div>
+
+          <div className="flex gap-4 justify-center items-center">
+            <button 
+              onClick={refreshData}
+              className="flex-1 bg-slate-900 hover:bg-[#007cba] text-white py-4.5 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all shadow-xl shadow-slate-100/50 flex items-center justify-center gap-2 group active:scale-95 cursor-pointer"
+            >
+              <Loader2 size={14} className="animate-spin text-white" /> Atualizar Status
+            </button>
+
+            <button 
+              onClick={handleLogout}
+              className="bg-white border border-slate-200 text-rose-500 hover:bg-rose-50 hover:border-rose-200 py-4.5 px-6 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all shadow-sm flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+            >
+              <LogOut size={14} /> Sair
+            </button>
+          </div>
+
+          <p className="text-[9px] font-black text-slate-400 mt-8 uppercase tracking-widest select-none">
+            Pascom Tasks • Comunidade Conectada
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Unificação da lógica de Coordenador e admin
   const isUserCoordinator = currentUser && isCoordinator(currentUser.role);
@@ -272,7 +475,7 @@ function App() {
           onRefresh={refreshData}
         />
       );
-      case 'tarefas': return <Tasks tasks={tasks} users={users} currentUser={currentUser} onRefresh={() => queryClient.invalidateQueries({ queryKey: ['tasks'] })} />;
+      case 'tarefas': return <Tasks tasks={tasks} schedules={schedules} users={users} currentUser={currentUser} onRefresh={() => { queryClient.invalidateQueries({ queryKey: ['tasks'] }); queryClient.invalidateQueries({ queryKey: ['schedules'] }); }} />;
       case 'escalas': return <Schedules schedules={schedules} users={users} currentUser={currentUser} onRefresh={refreshData} />;
       case 'ava': return <Ava 
         courses={courses} 
@@ -280,9 +483,13 @@ function App() {
         currentUser={currentUser} 
         users={users} 
         onRefresh={refreshData} 
-        onBreadcrumbChange={setAvaBreadcrumbs}
+        viewMode={avaViewMode}
+        setViewMode={setAvaViewMode}
+        activeCourse={avaActiveCourse}
+        setActiveCourse={setAvaActiveCourse}
       />;
-      case 'agentes': return <Agents users={users} currentUser={currentUser} onRefresh={refreshData} />;
+      case 'agentes': return <Agents users={users} currentUser={currentUser} onRefresh={refreshData} onTabChange={(tab: any) => setActiveTab(tab)} />;
+      case 'inscricoes': return <Registrations currentUser={currentUser!} />;
       case 'patrimonio': return <Inventory items={inventory} users={users} currentUser={currentUser} onRefresh={refreshData} />;
       case 'tesouro': return (
         <FinancialPatrimony 
@@ -294,7 +501,22 @@ function App() {
           onRefresh={() => queryClient.invalidateQueries({ queryKey: ['financial'] })}
         />
       );
-      case 'perfil': return <Profile user={currentUser} email={session.user.email} tasks={tasks} schedules={schedules} posts={posts} onUpdate={refreshData} onLogout={handleLogout} />;
+      case 'perfil': return (
+        <Profile 
+          user={currentUser} 
+          email={session.user.email} 
+          tasks={tasks} 
+          schedules={schedules} 
+          posts={posts} 
+          onUpdate={refreshData} 
+          onLogout={handleLogout} 
+          onNavigateToAva={(mode) => {
+            setAvaViewMode(mode);
+            setAvaActiveCourse(null);
+            setActiveTab('ava');
+          }}
+        />
+      );
       default: return <Feed posts={posts} users={users} currentUser={currentUser} onRefresh={() => queryClient.invalidateQueries({ queryKey: ['posts'] })} />;
     }
   };
@@ -370,7 +592,7 @@ function App() {
   return (
     <div className="h-screen w-full bg-[#f8fafc] flex flex-col overflow-hidden relative font-sans text-slate-900">
       <main className="flex-1 flex flex-col h-full min-w-0 relative overflow-hidden">
-        <NotificationsPanel notifications={notifications} isOpen={notificationsOpen} onClose={() => setNotificationsOpen(false)} onMarkAsRead={handleMarkAsRead} onMarkAllAsRead={handleMarkAllAsRead} onClearAll={handleClearAll} onRequestSystemPermissions={requestSystemNotificationPermission} />
+        <NotificationsPanel notifications={notifications} isOpen={notificationsOpen} onClose={() => setNotificationsOpen(false)} onMarkAsRead={handleMarkAsRead} onMarkAllAsRead={handleMarkAllAsRead} onClearAll={handleClearAll} onRequestSystemPermissions={requestSystemNotificationPermission} currentUser={currentUser} />
         
         <AnimatePresence>
           {currentUser && currentUser.onboarding_completed === false && (
@@ -404,15 +626,7 @@ function App() {
                 <img src="https://i.imgur.com/ofoiwCd.png" alt="Pascom Tasks" className="h-10 w-auto" />
               </button>
               
-              <div className="w-px h-6 bg-slate-200 hidden xl:block" />
-              
-              <div className="hidden xl:flex items-center min-w-0">
-                {activeTab === 'ava' && avaBreadcrumbs && (
-                  <div className="animate-in fade-in slide-in-from-left-4 duration-500 whitespace-nowrap overflow-hidden">
-                    {avaBreadcrumbs}
-                  </div>
-                )}
-              </div>
+              {/* Content left empty */}
            </div>
 
            {/* Center: Main Navigation */}
@@ -422,6 +636,8 @@ function App() {
               <DesktopNavItem tab="tarefas" icon={CheckSquare} label="Tarefas" />
               <DesktopNavItem tab="ava" icon={GraduationCap} label="Formação" />
               <DesktopNavItem tab="agentes" icon={Users} label="Membros" />
+               
+
            </nav>
 
            {/* Right: Notifications + Identity */}
@@ -456,9 +672,9 @@ function App() {
 
         <div 
           ref={scrollRef}
-          className={`flex-1 overflow-y-auto pt-1 pb-24 md:pb-12 hide-scroll transition-all duration-700 ${loading ? 'blur-xl grayscale opacity-50 scale-[0.98]' : 'blur-0 grayscale-0 opacity-100 scale-100'}`}
+          className={`flex-1 pt-1 pb-12 hide-scroll transition-all duration-700 overflow-y-auto ${loading ? 'blur-xl grayscale opacity-50 scale-[0.98]' : 'blur-0 grayscale-0 opacity-100 scale-100'}`}
         >
-          <div className="max-w-7xl mx-auto md:px-6">
+          <div className="max-w-7xl mx-auto md:px-6 w-full">
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeTab}
@@ -466,6 +682,7 @@ function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -15 }}
                 transition={{ duration: 0.3, ease: "easeOut" }}
+                className={activeTab === 'ava' ? 'w-full lg:h-full lg:max-h-full lg:flex lg:flex-col lg:min-h-0' : 'w-full'}
               >
                 {renderContent()}
               </motion.div>
@@ -475,14 +692,76 @@ function App() {
 
         {loading && <LoadingScreen />}
 
-        {/* Floating Bottom Nav for Mobile */}
-        <nav className="md:hidden fixed bottom-6 left-6 right-6 z-50 bg-brand-blue/90 backdrop-blur-xl rounded-3xl p-2 px-1 shadow-2xl flex items-center justify-around border border-white/10">
-          <MobileNavItem tab="dashboard" icon={Home} label="Início" />
-          <MobileNavItem tab="escalas" icon={Calendar} label="Escalas" />
-          <MobileNavItem tab="tarefas" icon={CheckSquare} label="Tarefas" />
-          <MobileNavItem tab="ava" icon={GraduationCap} label="Formação" />
-          <MobileNavItem tab="agentes" icon={Users} label="Membros" />
-        </nav>
+        {/* Floating Sandwich Page Menu Overlay for Mobile */}
+        <AnimatePresence>
+          {mobileMenuOpen && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ type: "spring", duration: 0.35 }}
+              className="md:hidden fixed bottom-24 left-6 right-6 z-50 bg-slate-900/95 backdrop-blur-xl rounded-[2.5rem] p-6 shadow-2xl border border-white/10 flex flex-col gap-4 text-white"
+            >
+              <div className="grid grid-cols-2 gap-3 max-h-[380px] overflow-y-auto pr-1 scrollbar-thin">
+                {[
+                  { tab: 'dashboard', icon: Home, label: 'Início', color: '#4ade80' },
+                  { tab: 'escalas', icon: Calendar, label: 'Escalas', color: '#60a5fa' },
+                  { tab: 'tarefas', icon: CheckSquare, label: 'Tarefas', color: '#f87171' },
+                  { tab: 'ava', icon: GraduationCap, label: 'Formação', color: '#facc15' },
+                  { tab: 'agentes', icon: Users, label: 'Membros', color: '#fb923c' },
+                  { tab: 'patrimonio', icon: Box, label: 'Patrimônio', color: '#a78bfa' },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.tab;
+                  return (
+                    <button
+                      key={item.tab}
+                      onClick={() => {
+                        setActiveTab(item.tab as Tab);
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`flex flex-col items-start gap-2.5 p-4 rounded-3xl transition-all border text-left scale-98 active:scale-95 cursor-pointer ${
+                        isActive 
+                          ? 'bg-white/15 border-white/30 ring-2 ring-white/15' 
+                          : 'bg-white/5 border-transparent hover:bg-white/10'
+                      }`}
+                    >
+                      <div className="p-2.5 rounded-2xl flex items-center justify-center" style={{ backgroundColor: `${item.color}15`, color: item.color }}>
+                        <Icon size={18} strokeWidth={2.5} />
+                      </div>
+                      <span className="text-[11px] font-black uppercase tracking-wider text-white">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Floating circular menu button (hamburger menu button) styled aligned to bottom right, harmoniously below Ton */}
+        <motion.button
+          id="btn-mobile-menu-fab"
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="md:hidden fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-brand-blue flex items-center justify-center shadow-[0_8px_30px_rgba(15,23,42,0.35)] hover:shadow-[0_12px_45px_rgba(15,23,42,0.45)] border-2 border-white cursor-pointer"
+        >
+          {mobileMenuOpen ? (
+            <X size={24} className="text-white" />
+          ) : (
+            <Menu size={24} className="text-white" />
+          )}
+        </motion.button>
+        
+        {/* Persistent Floating Chat Assistant (Ton) for schedules, tasks and agenda */}
+        {activeTab !== 'ava' && (
+          <TonFABChat 
+            currentUser={currentUser} 
+            tasks={tasks} 
+            schedules={schedules} 
+            users={users} 
+          />
+        )}
       </main>
     </div>
   );

@@ -19,15 +19,33 @@ export enum TaskPriority {
   HIGH = 'Alta',
 }
 
+export interface Badge {
+  id: string;
+  name: string;
+  emoji: string;
+  description: string;
+  color: string;
+}
+
+export const AVAILABLE_BADGES: Badge[] = [
+  { id: 'espiritualidade', name: 'Estrela da Fé', emoji: '🕊️', description: 'Concedido ao concluir um curso de Espiritualidade.', color: 'from-amber-400 to-yellow-500' },
+  { id: 'tecnico', name: 'Mestre das Mídias', emoji: '🛠️', description: 'Concedido ao concluir um curso Técnico.', color: 'from-blue-500 to-indigo-600' },
+  { id: 'lideranca', name: 'Líder Pasconista', emoji: '🧭', description: 'Concedido ao concluir um curso de Liderança.', color: 'from-purple-500 to-fuchsia-600' },
+  { id: 'geral', name: 'Comunicador Geral', emoji: '📚', description: 'Concedido ao concluir um curso Geral.', color: 'from-emerald-500 to-teal-600' }
+];
+
 export interface User {
   id: string;
   name: string;
+  email?: string;
   role: UserRole | string;
   avatar: string;
   birthday: string; // ISO date
   skills: string[];
   onboarding_completed?: boolean;
   unavailableDates?: string[]; // Array of ISO date strings (YYYY-MM-DD)
+  badges?: string[];
+  rawSkills?: string[];
 }
 
 export const isCoordinator = (role: string | UserRole): boolean => {
@@ -86,11 +104,26 @@ export interface Course {
 export interface Lesson {
   id: string;
   courseId: string;
+  moduleId?: string;
   title: string;
-  videoUrl: string;
+  videoUrl?: string;
   duration?: string;
   description?: string;
   orderIndex?: number;
+  contentType?: 'video' | 'text' | 'html' | 'markdown' | 'document' | 'code' | 'embed';
+  textContent?: string;
+  htmlContent?: string;
+  markdownContent?: string;
+  videoType?: 'youtube' | 'vimeo' | 'upload' | 'external';
+  documentUrl?: string;
+  documentType?: 'pdf' | 'docx' | 'pptx' | 'xlsx' | 'epub' | 'txt';
+  codeSnippet?: string;
+  codeLanguage?: string;
+  embedUrl?: string;
+  isLocked?: boolean;
+  prerequisiteId?: string; // ID of lesson/quiz that must be done first
+  attachments?: { name: string; url: string; size?: string }[];
+  pdfLinks?: { title: string; url: string }[];
 }
 
 export interface DocumentItem {

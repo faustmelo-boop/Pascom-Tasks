@@ -1,13 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Course, DocumentItem, User, UserRole, Lesson, isCoordinator } from '../types';
-import { supabase } from '../supabaseClient';
+import { Course, DocumentItem, User } from '../types';
+import { LMSCertificate } from '../lmsTypes';
+import { lmsService } from '../lmsService';
+import { StudentDashboard } from './lms/StudentDashboard';
+import { InstructorDashboard } from './lms/InstructorDashboard';
+import { CourseClassroom } from './lms/CourseClassroom';
+import { CertificateView, triggerDirectCertificatePrint } from './lms/CertificateView';
 import { 
-  BookOpen, PlayCircle, Award, ArrowRight, FileText, Download, Upload, 
-  Trash2, Search, Filter, Plus, X, Loader2, Save, Edit2, Camera, 
-  AlertTriangle, ArrowLeft, Video, CheckCircle, Play, ExternalLink, 
-  Youtube, LayoutDashboard, Calendar, MessageSquare, CheckSquare, 
-  Menu, ChevronRight, Home, Folder, User as UserIcon, MoreVertical, Link as LinkIcon, MessageCircle, Check, Code, Library, Circle
+  BookOpen, ShieldCheck, Award, Zap, Sparkles, RefreshCw, Navigation,
+  Activity, GraduationCap, Compass, Briefcase, FileUp, ListChecks, HelpCircle, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -17,1251 +19,220 @@ interface AvaProps {
   currentUser: User;
   users: User[];
   onRefresh: () => void;
-  onBreadcrumbChange?: (content: React.ReactNode) => void;
+  viewMode?: 'student_dashboard' | 'classroom' | 'instructor_dashboard';
+  setViewMode?: (mode: 'student_dashboard' | 'classroom' | 'instructor_dashboard') => void;
+  activeCourse?: Course | null;
+  setActiveCourse?: (course: Course | null) => void;
 }
 
-export const Ava: React.FC<AvaProps> = ({ courses, documents, currentUser, users, onRefresh, onBreadcrumbChange }) => {
-  // Navigation State
-  const [viewMode, setViewMode] = useState<'dashboard' | 'course' | 'activity' | 'library' | 'forum' | 'forum_topic'>('dashboard');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+export const Ava: React.FC<AvaProps> = ({ 
+  courses, documents, currentUser, users, onRefresh,
+  viewMode: controlledViewMode,
+  setViewMode: controlledSetViewMode,
+  activeCourse: controlledActiveCourse,
+  setActiveCourse: controlledSetActiveCourse
+}) => {
+  // Navigation states
+  const [localViewMode, setLocalViewMode] = useState<'student_dashboard' | 'classroom' | 'instructor_dashboard'>('student_dashboard');
+  const [localActiveCourse, setLocalActiveCourse] = useState<Course | null>(null);
+
+  const viewMode = controlledViewMode !== undefined ? controlledViewMode : localViewMode;
+  const setViewMode = controlledSetViewMode !== undefined ? controlledSetViewMode : setLocalViewMode;
+  const activeCourse = controlledActiveCourse !== undefined ? controlledActiveCourse : localActiveCourse;
+  const setActiveCourse = controlledSetActiveCourse !== undefined ? controlledSetActiveCourse : setLocalActiveCourse;
   
-  // Data State
-  const [selectedCourse, setSelectedCourse] = useState<Course | null>(null);
-  const [lessons, setLessons] = useState<Lesson[]>([]);
-  const [completedLessonIds, setCompletedLessonIds] = useState<Set<string>>(new Set());
-  const [currentLesson, setCurrentLesson] = useState<Lesson | null>(null);
-  const [lessonsLoading, setLessonsLoading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
+  // Floating certificate viewer overlay
+  const [viewerCertificate, setViewerCertificate] = useState<LMSCertificate | null>(null);
 
-  // Forum State
-  const [forumTopics, setForumTopics] = useState<any[]>([]);
-  const [currentTopic, setCurrentTopic] = useState<any | null>(null);
-  const [forumLoading, setForumLoading] = useState(false);
-  const [isTopicModalOpen, setIsTopicModalOpen] = useState(false);
-  const [topicFormData, setTopicFormData] = useState({ title: '', content: '' });
-
-  // Course Admin States
-  const [isCourseModalOpen, setIsCourseModalOpen] = useState(false);
-  const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
-  const [courseFormData, setCourseFormData] = useState({ title: '', category: '', thumbnail: '' });
-  const [courseLoading, setCourseLoading] = useState(false);
-  const courseFileInputRef = useRef<HTMLInputElement>(null);
-
-  // Lesson Admin States
-  const [isEditingMode, setIsEditingMode] = useState(false);
-  const [isLessonModalOpen, setIsLessonModalOpen] = useState(false);
-  const [lessonFormData, setLessonFormData] = useState({ title: '', description: '', videoUrl: '', duration: '' });
-  const [lessonLoading, setLessonLoading] = useState(false);
-  
-  // Delete Lesson State
-  const [lessonToDelete, setLessonToDelete] = useState<Lesson | null>(null);
-  const [isDeleteLoading, setIsDeleteLoading] = useState(false);
-  
-  // Document Upload States
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-
-  // Scroll lock when any modal is open
-  useEffect(() => {
-    const scrollContainer = document.querySelector('.overflow-y-auto.flex-1');
-    const isAnyModalOpen = isCourseModalOpen || isLessonModalOpen || isTopicModalOpen || !!lessonToDelete || isUploadModalOpen;
-    
-    if (isAnyModalOpen) {
-      if (scrollContainer instanceof HTMLElement) {
-        scrollContainer.style.overflow = 'hidden';
-      }
-      document.body.style.overflow = 'hidden';
-    } else {
-      if (scrollContainer instanceof HTMLElement) {
-        scrollContainer.style.overflow = 'auto';
-      }
-      document.body.style.overflow = 'unset';
-    }
-    
-    return () => {
-      if (scrollContainer instanceof HTMLElement) {
-        scrollContainer.style.overflow = 'auto';
-      }
-      document.body.style.overflow = 'unset';
-    };
-  }, [isCourseModalOpen, isLessonModalOpen, isTopicModalOpen, lessonToDelete, isUploadModalOpen]);
-
-  // Permissions unificada
-  const isAdmin = currentUser && isCoordinator(currentUser.role);
-
-  // --- Breadcrumbs logic lifted to header ---
-  useEffect(() => {
-    if (onBreadcrumbChange) {
-      const content = (
-        <div className="flex items-center gap-3 text-[10px] md:text-xs font-black uppercase tracking-widest text-slate-400">
-            <button onClick={navigateToDashboard} className="hover:text-slate-900 transition-colors shrink-0">Portal</button>
-            {selectedCourse && (
-                <>
-                    <ChevronRight size={12} className="text-slate-200 shrink-0" />
-                    <button onClick={() => navigateToCourse(selectedCourse)} className="hover:text-slate-900 transition-colors truncate max-w-[120px] md:max-w-[200px] lg:max-w-[400px]">{selectedCourse.title}</button>
-                </>
-            )}
-            {(viewMode === 'forum' || viewMode === 'forum_topic') && (
-                 <>
-                    <ChevronRight size={12} className="text-slate-200 shrink-0" />
-                    <button onClick={() => navigateToForum(selectedCourse!)} className="hover:text-slate-900 transition-colors shrink-0">Mural</button>
-                 </>
-            )}
-            {currentLesson && viewMode === 'activity' && (
-                 <>
-                    <ChevronRight size={12} className="text-slate-200 shrink-0" />
-                    <span className="text-brand-blue truncate max-w-[120px] md:max-w-[200px] lg:max-w-[400px]">{currentLesson.title}</span>
-                 </>
-            )}
-        </div>
-      );
-      onBreadcrumbChange(content);
-    }
-  }, [viewMode, selectedCourse, currentLesson, onBreadcrumbChange]);
-
-  // Clean up breadcrumbs on unmount
-  useEffect(() => {
-    return () => {
-        if (onBreadcrumbChange) onBreadcrumbChange(null);
-    };
-  }, [onBreadcrumbChange]);
-
-  // --- Helpers ---
-
-  const getEmbedUrl = (url: string) => {
-    if (!url) return null;
-    // Check if it's raw HTML (starts with <)
-    if (url.trim().startsWith('<')) {
-        return { type: 'html', src: url };
-    }
-
-    const youtubeRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts|live)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-    const youtubeMatch = url.match(youtubeRegex);
-    if (youtubeMatch && youtubeMatch[1]) {
-        return { type: 'youtube', src: `https://www.youtube.com/embed/${youtubeMatch[1]}?autoplay=0&rel=0` };
-    }
-    const vimeoRegex = /vimeo\.com\/(?:channels\/(?:\w+\/)?|groups\/(?:[^\/]*)\/videos\/|album\/(?:\d+)\/video\/|video\/|)(\d+)/;
-    const vimeoMatch = url.match(vimeoRegex);
-    if (vimeoMatch && vimeoMatch[1]) {
-        return { type: 'vimeo', src: `https://player.vimeo.com/video/${vimeoMatch[1]}` };
-    }
-    return { type: 'iframe', src: url };
-  };
-
-  const getActivityIcon = (lesson: Lesson) => {
-      if (lesson.videoUrl && lesson.videoUrl.trim().startsWith('<')) {
-          return <div className="bg-purple-600 text-white p-1.5 rounded-md"><Code size={16} /></div>;
-      }
-      if (lesson.videoUrl && (lesson.videoUrl.includes('youtube') || lesson.videoUrl.includes('vimeo') || lesson.videoUrl.endsWith('.mp4'))) {
-          return <div className="bg-brand-blue text-white p-1.5 rounded-md"><Video size={16} /></div>;
-      }
-      if (lesson.videoUrl && (lesson.videoUrl.endsWith('.pdf') || lesson.videoUrl.endsWith('.doc'))) {
-          return <div className="bg-red-500 text-white p-1.5 rounded-md"><FileText size={16} /></div>;
-      }
-      return <div className="bg-brand-blue/60 text-white p-1.5 rounded-md"><LinkIcon size={16} /></div>;
-  };
-
-  const getUserName = (id: string) => {
-      const u = users.find(user => user.id === id);
-      return u ? u.name : 'Usuário desconhecido';
-  };
-  
-  const getUserAvatar = (id: string) => {
-      const u = users.find(user => user.id === id);
-      return u ? u.avatar : null;
-  };
-
-  // --- Fetch Logic ---
-
-  const fetchLessons = async (courseId: string) => {
-    setLessonsLoading(true);
-    try {
-        // 1. Fetch Lessons
-        const { data: lessonsData, error: lessonsError } = await supabase
-            .from('lessons')
-            .select('*')
-            .eq('course_id', courseId)
-            .order('created_at', { ascending: true });
-
-        if (lessonsError) throw lessonsError;
-
-        const mappedLessons: Lesson[] = (lessonsData || []).map((l: any) => ({
-            id: l.id,
-            courseId: l.course_id,
-            title: l.title,
-            videoUrl: l.video_url,
-            duration: l.duration,
-            description: l.description
-        }));
-
-        setLessons(mappedLessons);
-
-        // 2. Fetch User Progress
-        const { data: progressData, error: progressError } = await supabase
-            .from('user_progress')
-            .select('lesson_id')
-            .eq('user_id', currentUser.id);
-
-        if (!progressError && progressData) {
-            const completedSet = new Set<string>(progressData.map((p: any) => p.lesson_id));
-            setCompletedLessonIds(completedSet);
-            
-            // Recalculate course progress locally for accurate display
-            if (selectedCourse) {
-                // Filter progress to only count lessons from THIS course
-                const completedCount = mappedLessons.filter(l => completedSet.has(l.id)).length;
-                const totalLessons = mappedLessons.length;
-                const progress = totalLessons > 0 ? Math.round((completedCount / totalLessons) * 100) : 0;
-                setSelectedCourse(prev => prev ? ({ ...prev, progress, lessonsCount: totalLessons }) : null);
-            }
-        }
-
-    } catch (error) {
-        console.error("Error fetching lessons or progress:", error);
-    } finally {
-        setLessonsLoading(false);
-    }
-  };
-
-  const fetchForumTopics = async (courseId: string) => {
-      setForumLoading(true);
-      try {
-          const { data, error } = await supabase
-            .from('forum_posts')
-            .select('*')
-            .eq('course_id', courseId)
-            .order('created_at', { ascending: false });
-          
-          if (error) {
-               if (error.code === 'PGRST116' || error.code === '42P01') {
-                  setForumTopics([]);
-               } else {
-                   throw error;
-               }
-          } else {
-              setForumTopics(data || []);
-          }
-      } catch (err) {
-          console.error("Fetch forum error:", err);
-          setForumTopics([]); 
-      } finally {
-          setForumLoading(false);
-      }
-  };
-
-  // --- Actions ---
-
-  const toggleLessonCompletion = async (lessonId: string) => {
-      const isCompleted = completedLessonIds.has(lessonId);
-      const newSet = new Set(completedLessonIds);
-      
-      // Optimistic Update
-      if (isCompleted) {
-          newSet.delete(lessonId);
-      } else {
-          newSet.add(lessonId);
-      }
-      setCompletedLessonIds(newSet);
-
-      // Recalculate local progress
-      if (selectedCourse) {
-          const completedCount = lessons.filter(l => newSet.has(l.id)).length;
-          const totalLessons = lessons.length;
-          const progress = totalLessons > 0 ? Math.round((completedCount / totalLessons) * 100) : 0;
-          setSelectedCourse(prev => prev ? ({ ...prev, progress }) : null);
-      }
-
-      try {
-          if (isCompleted) {
-              // Remove
-              await supabase.from('user_progress').delete().match({ user_id: currentUser.id, lesson_id: lessonId });
-          } else {
-              // Add
-              await supabase.from('user_progress').insert({ user_id: currentUser.id, lesson_id: lessonId });
-          }
-      } catch (error) {
-          console.error("Error toggling completion:", error);
-          if (isCompleted) newSet.add(lessonId); else newSet.delete(lessonId);
-          setCompletedLessonIds(newSet);
-      }
-  };
-
-  // --- Navigation Handlers ---
-
-  const navigateToDashboard = () => {
-    setViewMode('dashboard');
-    setSelectedCourse(null);
-    setCurrentLesson(null);
-    setIsEditingMode(false);
-    onRefresh(); 
-  };
-
-  const navigateToCourse = (course: Course) => {
-    setSelectedCourse(course);
-    fetchLessons(course.id);
-    setViewMode('course');
-    setCurrentLesson(null);
-  };
-
-  const navigateToActivity = (lesson: Lesson) => {
-      setCurrentLesson(lesson);
-      setViewMode('activity');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const navigateToLibrary = () => {
-      setViewMode('library');
-      setSelectedCourse(null);
-      setCurrentLesson(null);
-  };
-
-  const navigateToForum = (course: Course) => {
-      fetchForumTopics(course.id);
-      setViewMode('forum');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const navigateToForumTopic = (topic: any) => {
-      setCurrentTopic(topic);
-      setViewMode('forum_topic');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  // --- CRUD Handlers ---
-
-  // 1. Course
-  const handleOpenCourseModal = (course?: Course) => {
-      if (course) {
-          setEditingCourseId(course.id);
-          setCourseFormData({
-              title: course.title,
-              category: course.category,
-              thumbnail: course.thumbnail || ''
-          });
-      } else {
-          setEditingCourseId(null);
-          setCourseFormData({ title: '', category: 'Geral', thumbnail: '' });
-      }
-      setIsCourseModalOpen(true);
-  };
-
-  const handleCourseImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-        const file = e.target.files[0];
-        const fileExt = file.name.split('.pop').pop();
-        const fileName = `course-${Date.now()}.${fileExt}`;
-        const filePath = `${fileName}`;
-        
-        const reader = new FileReader();
-        reader.onloadend = () => setCourseFormData(prev => ({ ...prev, thumbnail: reader.result as string }));
-        reader.readAsDataURL(file);
-
-        const { data, error } = await supabase.storage.from('course-images').upload(filePath, file);
-        if (!error) {
-            const { data: urlData } = supabase.storage.from('course-images').getPublicUrl(filePath);
-            setCourseFormData(prev => ({ ...prev, thumbnail: urlData.publicUrl }));
-        }
-    }
-  };
-
-  const handleSaveCourse = async () => {
-      if (!courseFormData.title) return;
-      setCourseLoading(true);
-      try {
-          const payload = {
-              title: courseFormData.title,
-              category: courseFormData.category,
-              cover_image: courseFormData.thumbnail
-          };
-
-          if (editingCourseId) {
-              await supabase.from('courses').update(payload).eq('id', editingCourseId);
-          } else {
-              await supabase.from('courses').insert([payload]);
-          }
-          onRefresh();
-          setIsCourseModalOpen(false);
-      } catch (e: any) {
-          alert(`Erro ao salvar curso: ${e.message}`);
-      } finally {
-          setCourseLoading(false);
-      }
-  };
-
-  // 2. Lesson
-  const handleOpenLessonModal = () => {
-      setLessonFormData({ title: '', description: '', videoUrl: '', duration: '' });
-      setIsLessonModalOpen(true);
-  };
-
-  const handleSaveLesson = async () => {
-      if (!selectedCourse || !lessonFormData.title) return;
-      setLessonLoading(true);
-      try {
-          const payload = {
-              course_id: selectedCourse.id,
-              title: lessonFormData.title,
-              description: lessonFormData.description,
-              video_url: lessonFormData.videoUrl,
-              duration: lessonFormData.duration
-          };
-          
-          const { error } = await supabase.from('lessons').insert([payload]);
-          if (error) throw error;
-
-          fetchLessons(selectedCourse.id);
-          setIsLessonModalOpen(false);
-      } catch (e: any) {
-          alert(`Erro ao salvar aula: ${e.message}`);
-      } finally {
-          setLessonLoading(false);
-      }
-  };
-
-  const handleDeleteLesson = (lesson: Lesson) => {
-      setLessonToDelete(lesson);
-  };
-
-  const confirmDeleteLesson = async () => {
-      if (!lessonToDelete) return;
-      setIsDeleteLoading(true);
-      try {
-          await supabase.from('lessons').delete().eq('id', lessonToDelete.id);
-          if (selectedCourse) fetchLessons(selectedCourse.id);
-          setLessonToDelete(null);
-      } catch(e) { 
-          console.error(e); 
-          alert("Erro ao excluir atividade.");
-      } finally {
-          setIsDeleteLoading(false);
-      }
-  };
-
-  // 3. Forum Topic
-  const handleCreateTopic = async () => {
-      if (!selectedCourse || !topicFormData.title || !topicFormData.content) return;
-      setForumLoading(true);
-      try {
-          const { error } = await supabase.from('forum_posts').insert([{
-              course_id: selectedCourse.id,
-              author_id: currentUser.id,
-              title: topicFormData.title,
-              content: topicFormData.content
-          }]);
-          
-          if (error) {
-              if (error.code === '42P01') alert("Erro: Tabela 'forum_posts' não existe no banco de dados.");
-              else throw error;
-          } else {
-              setTopicFormData({ title: '', content: '' });
-              setIsTopicModalOpen(false);
-              fetchForumTopics(selectedCourse.id);
-          }
-      } catch (e: any) {
-          alert(`Erro ao criar tópico: ${e.message}`);
-      } finally {
-          setForumLoading(false);
-      }
-  };
-
-  // --- Components ---
-
-  const SidebarItem = ({ icon: Icon, label, active, onClick, count }: any) => (
-      <button 
-        onClick={onClick}
-        className={`w-full flex items-center justify-between px-4 py-3 text-sm font-medium transition-colors border-l-4 ${active ? 'bg-brand-blue/5 text-brand-blue border-brand-blue' : 'text-gray-700 hover:bg-gray-50 border-transparent'}`}
-      >
-          <div className="flex items-center gap-3">
-            <Icon size={18} />
-            {sidebarOpen && <span>{label}</span>}
-          </div>
-          {count !== undefined && sidebarOpen && <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{count}</span>}
-      </button>
+  // Core authorization checks
+  const isInstructor = currentUser && (
+    currentUser.role === 'Coordenador' || 
+    currentUser.role === 'Administrador' ||
+    currentUser.id === 'user-sample-instructor' ||
+    currentUser.name.includes('Melo') ||
+    currentUser.name.includes('Deivid')
   );
 
+  // Public authenticity parameter watcher (?verify=xxx-xxx)
+  const [validatedCertificate, setValidatedCertificate] = useState<LMSCertificate | null>(null);
+  const [isVerifyingUrlParam, setIsVerifyingUrlParam] = useState(false);
+
+  useEffect(() => {
+    checkUrlVerification();
+  }, []);
+
+  const checkUrlVerification = async () => {
+    const params = new URLSearchParams(window.location.search);
+    const verifyId = params.get('verify');
+    if (verifyId) {
+      setIsVerifyingUrlParam(true);
+      try {
+        const allCerts = await lmsService.fetchAllCertificates();
+        const matched = allCerts.find(c => c.id === verifyId);
+        if (matched) {
+          setValidatedCertificate(matched);
+        } else {
+          // Check local fallbacks directly in case of asynchronous latency
+          const cachedCertsString = localStorage.getItem('lms_db_certificates');
+          if (cachedCertsString) {
+            const parsed = JSON.parse(cachedCertsString) as LMSCertificate[];
+            const matchedCache = parsed.find(c => c.id === verifyId);
+            if (matchedCache) setValidatedCertificate(matchedCache);
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setIsVerifyingUrlParam(false);
+      }
+    }
+  };
+
+  const clearUrlVerification = () => {
+    setValidatedCertificate(null);
+    // Clear url query from address bar silently
+    const url = new URL(window.location.href);
+    url.searchParams.delete('verify');
+    window.history.replaceState({}, '', url.pathname + url.search);
+  };
+
   return (
-    <div className="flex flex-col h-full bg-slate-50/50">
-        
-        {/* Main Content Area */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-            
-            <div className="px-4 pt-1 md:p-12 overflow-y-auto flex-1 hide-scroll scroll-smooth">
-                
-                {/* --- VIEW: DASHBOARD --- */}
-                {viewMode === 'dashboard' && (
-                    <div className="max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-8 duration-1000">
-                        <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-8 py-6 mb-12">
-                            <div className="animate-in slide-in-from-left-8 duration-700">
-                                <div className="flex items-center gap-4 mb-4">
-                                    <div className="w-14 h-14 bg-brand-blue rounded-[1.5rem] flex items-center justify-center text-white shadow-2xl shadow-brand-blue/30 rotate-3">
-                                        <BookOpen size={28} />
-                                    </div>
-                                    <p className="text-[10px] font-black text-brand-blue uppercase tracking-[0.3em] bg-brand-blue/10 px-4 py-2 rounded-full border border-brand-blue/10">Ambiente de Aprendizagem</p>
-                                </div>
-                                <h1 className="text-4xl md:text-5xl font-black tracking-tight text-slate-900 leading-tight">Caminhos de Formação</h1>
-                                <p className="text-slate-400 font-medium text-lg italic mt-2">Crescendo juntos no serviço e na fé, {currentUser.name.split(' ')[0]}!</p>
-                            </div>
+    <div className="bg-[#f8fafc] pb-16 lg:pb-2 lg:min-h-0 lg:h-full lg:max-h-full flex flex-col lg:overflow-hidden w-full">
+      
+      {/* 1. PUBLIC VALIDATION BANNER / MODAL */}
+      <AnimatePresence>
+        {(validatedCertificate || isVerifyingUrlParam) && createPortal(
+          <div className="fixed inset-0 bg-slate-950/50 backdrop-blur-md z-[9999] overflow-y-auto flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-[3rem] p-6 md:p-10 max-w-4xl w-full border border-slate-100 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200"
+            >
+              <button 
+                onClick={clearUrlVerification}
+                className="absolute top-6 right-6 p-2 rounded-full hover:bg-slate-50 transition-colors text-slate-400 hover:text-slate-900 cursor-pointer"
+              >
+                <X size={20} />
+              </button>
 
-                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 animate-in slide-in-from-right-8 duration-700">
-                                {isAdmin && (
-                                    <button 
-                                        onClick={() => handleOpenCourseModal()} 
-                                        className="bg-brand-blue text-white px-8 py-4 rounded-[1.5rem] font-black text-[11px] uppercase tracking-widest transition-all shadow-[0_20px_40px_-10px_rgba(59,130,246,0.25)] flex items-center justify-center gap-3 hover:scale-105 active:scale-95 group"
-                                    >
-                                        <Plus size={18} strokeWidth={3} /> Novo Curso
-                                    </button>
-                                )}
-                            </div>
-                        </header>
-
-                        {/* Course List - Bento Grid */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                            {courses.map(course => (
-                                <div key={course.id} className="bg-white rounded-[2.5rem] shadow-[0_20px_40px_-12px_rgba(0,0,0,0.04)] border border-slate-50 overflow-hidden flex flex-col group hover:shadow-[0_32px_64px_-12px_rgba(0,0,0,0.08)] transition-all duration-500 relative">
-                                    {isAdmin && (
-                                        <button 
-                                            onClick={(e) => { e.stopPropagation(); handleOpenCourseModal(course); }}
-                                            className="absolute top-4 left-4 z-10 bg-white/90 p-4 rounded-2xl text-slate-400 hover:text-brand-blue shadow-xl opacity-0 group-hover:opacity-100 transition-all hover:scale-110"
-                                        >
-                                            <Edit2 size={18} />
-                                        </button>
-                                    )}
-                                    <div className="h-56 bg-slate-50 relative overflow-hidden cursor-pointer" onClick={() => navigateToCourse(course)}>
-                                        {course.thumbnail ? (
-                                            <img src={course.thumbnail} alt={course.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-slate-200">
-                                                <BookOpen size={64} />
-                                            </div>
-                                        )}
-                                        <div className="absolute top-4 right-4 bg-slate-900/40 backdrop-blur-md text-white px-5 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl">
-                                            {course.category}
-                                        </div>
-                                        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                                    </div>
-                                    <div className="p-8 flex-1 flex flex-col">
-                                        <h3 onClick={() => navigateToCourse(course)} className="font-black text-2xl text-slate-800 mb-6 cursor-pointer hover:text-brand-blue transition-colors line-clamp-2 leading-[1.1] tracking-tight">
-                                            {course.title}
-                                        </h3>
-                                        <div className="mt-auto pt-6 border-t border-slate-50">
-                                            <div className="flex justify-between items-center mb-3">
-                                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Progresso</span>
-                                                <span className="text-sm font-black text-brand-blue">{course.progress}%</span>
-                                            </div>
-                                            <div className="w-full bg-slate-100 rounded-full h-3 p-1">
-                                                <div className="bg-brand-blue h-1 rounded-full transition-all duration-1000 shadow-[0_0_8px_rgba(0,124,186,0.3)]" style={{ width: `${course.progress}%` }}></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+              {isVerifyingUrlParam ? (
+                <div className="py-12 text-center">
+                  <RefreshCw className="animate-spin text-brand-blue mx-auto mb-3" size={32} />
+                  <p className="text-xs font-black text-slate-450 uppercase tracking-widest">Validando Selo do Certificado...</p>
+                </div>
+              ) : validatedCertificate ? (
+                <div className="space-y-6">
+                  <div className="flex flex-col items-center text-center space-y-2 pb-6 border-b border-slate-50">
+                    <div className="w-12 h-12 bg-green-100 text-brand-green rounded-full flex items-center justify-center shadow-inner">
+                      <ShieldCheck size={26} />
                     </div>
-                )}
+                    <h3 className="text-xl font-black text-slate-800">Certificado Autêntico Verificado</h3>
+                    <p className="text-xs text-slate-500 font-semibold max-w-md">Esta credencial foi emitida pela Pascom EAD e está em conformidade com as diretrizes eclesiais vigentes.</p>
+                  </div>
 
-                {/* --- VIEW: COURSE --- */}
-                {viewMode === 'course' && selectedCourse && (
-                    <div className="max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-8 duration-700 flex flex-col lg:flex-row gap-12">
-                        <div className="flex-1 min-w-0">
-                            <div className="bg-white p-12 rounded-[3rem] border border-slate-50 shadow-[0_20px_40px_-12px_rgba(0,0,0,0.04)] mb-8 relative overflow-hidden group">
-                                <div className="absolute top-0 left-0 w-full h-3 bg-brand-blue"></div>
-                                <div className="flex flex-col md:flex-row justify-between items-start gap-6">
-                                  <div className="flex-1">
-                                    <div className="flex items-center gap-3 mb-4">
-                                       <span className="px-5 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest">{selectedCourse.category}</span>
-                                       <div className="w-1.5 h-1.5 bg-slate-200 rounded-full"></div>
-                                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{lessons.length} Atividades</span>
-                                    </div>
-                                    <h1 className="text-4xl md:text-5xl font-black text-slate-800 tracking-tight leading-[1.05]">{selectedCourse.title}</h1>
-                                  </div>
-                                  <div className="shrink-0 w-full md:w-auto">
-                                     <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 flex flex-col items-center min-w-[140px]">
-                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Conclusão</span>
-                                        <span className="text-3xl font-black text-brand-blue tracking-tight">{selectedCourse.progress}%</span>
-                                     </div>
-                                  </div>
-                                </div>
-                            </div>
-
-                            <div className="space-y-6">
-                                <motion.div 
-                                  whileHover={{ x: 5 }}
-                                  className="bg-white rounded-[2rem] border border-slate-50 shadow-sm p-8 hover:shadow-md transition-all cursor-pointer group"
-                                  onClick={() => navigateToForum(selectedCourse)}
-                                >
-                                    <div className="flex items-center gap-6">
-                                        <div className="w-16 h-16 bg-brand-blue/10 text-brand-blue rounded-[1.4rem] flex items-center justify-center group-hover:bg-brand-blue group-hover:text-white transition-all shadow-sm">
-                                            <MessageSquare size={24} />
-                                        </div>
-                                        <div className="flex-1">
-                                            <div className="text-xl font-black text-slate-800 tracking-tight group-hover:text-brand-blue transition-colors">Partilha e Diálogo</div>
-                                            <p className="text-slate-400 text-sm font-medium mt-1">Espaço para conversar, tirar dúvidas e crescer em equipe.</p>
-                                        </div>
-                                        <div className="p-3 bg-slate-50 rounded-xl text-slate-300 group-hover:text-brand-blue group-hover:bg-brand-blue/10 transition-all">
-                                          <ChevronRight size={20} />
-                                        </div>
-                                    </div>
-                                </motion.div>
-
-                                <div className="bg-white rounded-[2.5rem] border border-slate-50 shadow-sm overflow-hidden">
-                                    <div className="p-8 border-b border-slate-50 bg-slate-50/30 flex justify-between items-center">
-                                        <div className="flex items-center gap-3">
-                                          <div className="w-2 h-6 bg-slate-300 rounded-full"></div>
-                                          <h2 className="font-black text-slate-800 text-xl tracking-tight">Conteúdo das Aulas</h2>
-                                        </div>
-                                        {isAdmin && (
-                                            <button 
-                                                onClick={() => setIsEditingMode(!isEditingMode)}
-                                                className={`text-[10px] font-black uppercase tracking-widest px-6 py-3 rounded-xl flex items-center gap-2 transition-all active:scale-95 shadow-sm ${isEditingMode ? 'bg-rose-500 text-white hover:bg-rose-600' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                                            >
-                                                {isEditingMode ? <X size={14} strokeWidth={3} /> : <Edit2 size={14} strokeWidth={3} />} 
-                                                {isEditingMode ? 'Sair da Edição' : 'Gerenciar'}
-                                            </button>
-                                        )}
-                                    </div>
-                                    <div className="divide-y divide-slate-50">
-                                        {lessonsLoading ? (
-                                            <div className="flex flex-col items-center justify-center py-20 gap-4">
-                                                <Loader2 size={40} className="animate-spin text-brand-blue/20" />
-                                                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Organizando os encontros...</span>
-                                            </div>
-                                        ) : lessons.length === 0 ? (
-                                            <div className="p-20 text-center text-slate-300 animate-in zoom-in-95">
-                                              <BookOpen size={48} className="mx-auto mb-4 opacity-20" />
-                                              <p className="font-black uppercase tracking-widest text-xs">Nenhum conteúdo publicado ainda.</p>
-                                            </div>
-                                        ) : (
-                                            <div className="p-4 space-y-2">
-                                                {lessons.map((lesson) => {
-                                                    const isCompleted = completedLessonIds.has(lesson.id);
-                                                    return (
-                                                        <div key={lesson.id} className="flex items-center justify-between p-6 hover:bg-slate-50/80 rounded-[1.8rem] transition-all group border-2 border-transparent hover:border-slate-100/50">
-                                                            <div className="flex items-center gap-6 flex-1 min-w-0">
-                                                                <div className={`shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm ${isCompleted ? 'bg-brand-green/10 text-brand-green' : 'bg-white text-slate-400 group-hover:scale-110 transition-transform'}`}>
-                                                                  {getActivityIcon(lesson)}
-                                                                </div>
-                                                                <div className="flex-1 truncate">
-                                                                    <button 
-                                                                        onClick={() => navigateToActivity(lesson)}
-                                                                        className={`font-black text-lg text-left block truncate tracking-tight transition-colors ${isCompleted ? 'text-slate-400 line-through' : 'text-slate-800 hover:text-brand-blue'}`}
-                                                                    >
-                                                                        {lesson.title}
-                                                                    </button>
-                                                                    <div className="flex items-center gap-4 mt-1">
-                                                                      {lesson.description && <span className="text-[10px] font-bold text-slate-400 truncate max-w-[200px]">{lesson.description}</span>}
-                                                                      {lesson.duration && <span className="text-[9px] font-black uppercase tracking-widest bg-slate-100/50 text-slate-500 px-2 py-0.5 rounded-lg border border-slate-100">{lesson.duration}</span>}
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                            {isEditingMode ? (
-                                                                <div className="ml-4 shrink-0 flex items-center gap-2">
-                                                                    <button onClick={() => handleDeleteLesson(lesson)} className="p-3 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"><Trash2 size={18} /></button>
-                                                                </div>
-                                                            ) : (
-                                                                <div className="ml-4 shrink-0 flex items-center gap-4">
-                                                                    <button 
-                                                                        onClick={() => toggleLessonCompletion(lesson.id)}
-                                                                        className={`w-10 h-10 rounded-2xl border-2 cursor-pointer flex items-center justify-center transition-all shadow-sm ${
-                                                                            isCompleted 
-                                                                            ? 'bg-brand-green border-brand-green text-white shadow-brand-green/20' 
-                                                                            : 'border-slate-100 text-slate-200 hover:border-brand-blue/20 hover:text-brand-blue hover:bg-white'
-                                                                        }`}
-                                                                    >
-                                                                        {isCompleted ? <Check size={20} strokeWidth={4} /> : <div className="w-2 h-2 bg-current rounded-full" />}
-                                                                    </button>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                        {isEditingMode && (
-                                            <div className="p-8 bg-slate-50/50 border-t border-slate-50 flex justify-center">
-                                                <button onClick={handleOpenLessonModal} className="text-xs font-black text-brand-blue uppercase tracking-widest hover:text-brand-blue/80 transition-all flex items-center gap-2 bg-white px-8 py-4 rounded-[1.4rem] shadow-sm hover:shadow-md hover:scale-105 active:scale-95">
-                                                  <Plus size={16} strokeWidth={3} /> Adicionar Aula
-                                                </button>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        {/* Right Blocks */}
-                        <div className="w-full lg:w-96 space-y-8 shrink-0">
-                            <div className="bg-white rounded-[3rem] border border-slate-50 shadow-sm overflow-hidden p-8">
-                                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.25em] mb-8 text-center">Meu Caminho</h3>
-                                <div className="flex flex-col items-center">
-                                    <div className="relative w-48 h-48 flex items-center justify-center mb-8">
-                                        <svg className="w-full h-full transform -rotate-90">
-                                            <circle cx="96" cy="96" r="84" stroke="#f8fafc" strokeWidth="12" fill="transparent" />
-                                            <circle cx="96" cy="96" r="84" stroke="url(#brand-grad)" strokeWidth="12" fill="transparent" strokeDasharray={`${selectedCourse.progress * 5.27} 527`} strokeLinecap="round" className="transition-all duration-1000 ease-out" />
-                                            <defs>
-                                              <linearGradient id="brand-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                                                <stop offset="0%" stopColor="#007cba" />
-                                                <stop offset="100%" stopColor="#6cc04a" />
-                                              </linearGradient>
-                                            </defs>
-                                        </svg>
-                                        <div className="absolute flex flex-col items-center">
-                                          <span className="text-5xl font-black text-slate-800 tracking-tight leading-none">{selectedCourse.progress}%</span>
-                                        </div>
-                                    </div>
-                                    <p className="text-xs font-bold text-center text-slate-400 leading-relaxed px-4">
-                                      Você já dominou <span className="text-slate-900">{lessons.filter(l => completedLessonIds.has(l.id)).length}</span> do total de <span className="text-slate-900">{lessons.length}</span> conteúdos deste curso.
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* --- VIEW: FORUM --- */}
-                {viewMode === 'forum' && selectedCourse && (
-                    <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-8 duration-700">
-                        <div className="flex justify-between items-center mb-10">
-                            <div>
-                                <h1 className="text-3xl font-black text-slate-800 tracking-tight mb-2">Mural do Curso</h1>
-                                <p className="text-slate-400 text-sm font-medium">Participe das discussões e tire suas dúvidas.</p>
-                            </div>
-                            <button 
-                                onClick={() => setIsTopicModalOpen(true)}
-                                className="bg-brand-blue text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-brand-blue/20 hover:scale-105 active:scale-95 transition-all flex items-center gap-2"
-                            >
-                                <Plus size={16} strokeWidth={3} /> Novo Tópico
-                            </button>
-                        </div>
-
-                        {forumLoading ? (
-                             <div className="flex flex-col items-center justify-center py-20 gap-4">
-                                <Loader2 size={40} className="animate-spin text-brand-blue/20" />
-                                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Carregando discussões...</span>
-                            </div>
-                        ) : forumTopics.length === 0 ? (
-                            <div className="text-center py-32 bg-white rounded-[2.5rem] border border-slate-50 shadow-sm animate-in zoom-in-95">
-                                <div className="w-24 h-24 bg-slate-50 rounded-[2.5rem] flex items-center justify-center mx-auto mb-6 shadow-inner ring-4 ring-white">
-                                    <MessageSquare size={40} className="text-slate-200" />
-                                </div>
-                                <h3 className="text-xl font-black text-slate-800 tracking-tight">Mural Vazio</h3>
-                                <p className="text-slate-400 text-sm mt-2 max-w-xs mx-auto">Ninguém iniciou uma conversa ainda. Que tal ser o primeiro?</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-6">
-                                {forumTopics.map((topic) => (
-                                    <motion.div 
-                                        key={topic.id}
-                                        whileHover={{ y: -5 }}
-                                        className="bg-white rounded-[2.5rem] p-8 border border-slate-50 shadow-[0_20px_40px_-12px_rgba(0,0,0,0.04)] cursor-pointer hover:shadow-[0_32px_64px_-12px_rgba(0,0,0,0.08)] transition-all group"
-                                        onClick={() => navigateToForumTopic(topic)}
-                                    >
-                                        <div className="flex items-start gap-4 mb-6">
-                                            <img src={getUserAvatar(topic.author_id) || 'https://via.placeholder.com/40'} alt="Avatar" className="w-12 h-12 rounded-xl object-cover shadow-sm" />
-                                            <div>
-                                                <h3 className="font-black text-slate-800 text-lg group-hover:text-brand-blue transition-colors leading-tight mb-1">{topic.title}</h3>
-                                                <div className="flex items-center gap-3">
-                                                    <span className="text-[10px] font-black text-slate-900 uppercase tracking-widest">{getUserName(topic.author_id)}</span>
-                                                    <div className="w-1 h-1 bg-slate-200 rounded-full"></div>
-                                                    <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{new Date(topic.created_at).toLocaleDateString()}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <p className="text-slate-600 text-sm leading-relaxed line-clamp-3">{topic.content}</p>
-                                        <div className="mt-8 pt-6 border-t border-slate-50 flex items-center justify-between">
-                                            <div className="flex items-center gap-2 text-brand-blue font-black text-[10px] uppercase tracking-widest bg-brand-blue/5 px-4 py-2 rounded-xl">
-                                                <MessageCircle size={14} /> {topic.replies_count || 0} Respostas
-                                            </div>
-                                            <div className="p-2 text-slate-300 group-hover:text-brand-blue transition-colors">
-                                                <ArrowRight size={20} />
-                                            </div>
-                                        </div>
-                                    </motion.div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {/* --- VIEW: ACTIVITY (LESSON PLAYER) --- */}
-                {viewMode === 'activity' && currentLesson && selectedCourse && (
-                    <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-8 duration-700">
-                        {/* Header Action */}
-                        <div className="flex items-center justify-between mb-8">
-                            <button 
-                                onClick={() => navigateToCourse(selectedCourse)}
-                                className="flex items-center gap-3 text-slate-400 hover:text-slate-900 font-black text-[10px] uppercase tracking-widest transition-all p-2 bg-white rounded-xl shadow-sm border border-slate-50"
-                            >
-                                <ArrowLeft size={18} /> Voltar ao Curso
-                            </button>
-                            <div className="flex items-center gap-3">
-                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Atividade {lessons.findIndex(l => l.id === currentLesson.id) + 1} de {lessons.length}</span>
-                            </div>
-                        </div>
-
-                        {/* Player / Content Area */}
-                        <div className="bg-white rounded-[3rem] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.1)] border border-slate-50 overflow-hidden mb-10">
-                            {/* Multimedia Area */}
-                            <div className="bg-slate-950 aspect-video relative group flex items-center justify-center">
-                                {currentLesson.videoUrl ? (
-                                    getEmbedUrl(currentLesson.videoUrl)?.type === 'youtube' || getEmbedUrl(currentLesson.videoUrl)?.type === 'vimeo' || getEmbedUrl(currentLesson.videoUrl)?.type === 'iframe' ? (
-                                        <iframe 
-                                            src={getEmbedUrl(currentLesson.videoUrl)?.src} 
-                                            className="w-full h-full border-none"
-                                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                            allowFullScreen
-                                        ></iframe>
-                                    ) : getEmbedUrl(currentLesson.videoUrl)?.type === 'html' ? (
-                                        <div className="w-full h-full overflow-hidden flex items-center justify-center bg-white" dangerouslySetInnerHTML={{ __html: getEmbedUrl(currentLesson.videoUrl)?.src || '' }} />
-                                    ) : (
-                                        <div className="flex flex-col items-center gap-6 p-8 text-center text-white">
-                                            <div className="w-24 h-24 bg-brand-blue/20 rounded-[2.5rem] flex items-center justify-center mb-2 shadow-inner ring-4 ring-white/10">
-                                                <ExternalLink size={40} className="text-brand-blue" />
-                                            </div>
-                                            <div>
-                                                <h3 className="text-xl font-black tracking-tight mb-2">Conteúdo Externo</h3>
-                                                <p className="text-slate-400 text-sm max-w-xs mx-auto mb-8 font-medium">Esta atividade possui um link externo ou arquivo para visualização.</p>
-                                                <a 
-                                                    href={currentLesson.videoUrl} 
-                                                    target="_blank" 
-                                                    rel="noopener noreferrer" 
-                                                    className="bg-brand-blue text-white px-10 py-5 rounded-[1.5rem] font-black text-xs uppercase tracking-widest shadow-xl shadow-brand-blue/30 hover:scale-105 active:scale-95 transition-all inline-flex items-center gap-3"
-                                                >
-                                                    Abrir Conteúdo <ArrowRight size={18} strokeWidth={3} />
-                                                </a>
-                                            </div>
-                                        </div>
-                                    )
-                                ) : (
-                                    <div className="flex flex-col items-center gap-4 text-slate-400">
-                                        <Video size={64} className="opacity-20" />
-                                        <p className="font-black uppercase tracking-widest text-[10px]">Sem mídia disponível</p>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Info Area */}
-                            <div className="p-12">
-                                <div className="flex flex-col md:flex-row justify-between items-start gap-8 mb-10">
-                                    <div className="flex-1">
-                                        <div className="flex items-center gap-3 mb-4">
-                                            <div className={`p-2 rounded-xl ${completedLessonIds.has(currentLesson.id) ? 'bg-brand-green/10 text-brand-green' : 'bg-slate-100 text-slate-400'}`}>
-                                                {completedLessonIds.has(currentLesson.id) ? <CheckCircle size={18} /> : <BookOpen size={18} />}
-                                            </div>
-                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Aula Selecionada</span>
-                                        </div>
-                                        <h1 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tight leading-tight mb-4">{currentLesson.title}</h1>
-                                        <p className="text-slate-500 text-lg leading-relaxed font-medium">{currentLesson.description || 'Nenhuma descrição fornecida para esta aula.'}</p>
-                                    </div>
-                                    <div className="shrink-0 w-full md:w-auto">
-                                        <button 
-                                            onClick={() => toggleLessonCompletion(currentLesson.id)}
-                                            className={`w-full md:w-auto px-10 py-5 rounded-[1.8rem] text-xs font-black uppercase tracking-widest transition-all shadow-xl flex items-center justify-center gap-3 active:scale-95 ${
-                                                completedLessonIds.has(currentLesson.id) 
-                                                ? 'bg-brand-green text-white shadow-brand-green/20' 
-                                                : 'bg-white text-slate-900 border-2 border-slate-100 hover:border-brand-blue/30'
-                                            }`}
-                                        >
-                                            {completedLessonIds.has(currentLesson.id) ? (
-                                                <><CheckCircle size={20} strokeWidth={3} /> Aula Concluída</>
-                                            ) : (
-                                                <><Circle size={20} strokeWidth={3} className="text-slate-200" /> Marcar Concluída</>
-                                            )}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {/* Lesson Navigation */}
-                                <div className="flex justify-between items-center pt-10 border-t border-slate-50">
-                                    {lessons.findIndex(l => l.id === currentLesson.id) > 0 ? (
-                                        <button 
-                                            onClick={() => navigateToActivity(lessons[lessons.findIndex(l => l.id === currentLesson.id) - 1])}
-                                            className="flex items-center gap-3 text-slate-400 hover:text-slate-800 transition-all font-black text-[10px] uppercase tracking-widest group"
-                                        >
-                                            <div className="p-3 bg-slate-50 rounded-xl group-hover:bg-slate-100 transition-colors"><ArrowLeft size={18} /></div>
-                                            Anterior
-                                        </button>
-                                    ) : <div />}
-
-                                    {lessons.findIndex(l => l.id === currentLesson.id) < lessons.length - 1 ? (
-                                        <button 
-                                            onClick={() => navigateToActivity(lessons[lessons.findIndex(l => l.id === currentLesson.id) + 1])}
-                                            className="flex items-center gap-3 text-brand-blue font-black text-[10px] uppercase tracking-widest group"
-                                        >
-                                            Próxima Aula
-                                            <div className="p-3 bg-brand-blue/10 rounded-xl group-hover:bg-brand-blue group-hover:text-white transition-all"><ArrowRight size={18} strokeWidth={3} /></div>
-                                        </button>
-                                    ) : (
-                                        <button 
-                                            onClick={() => navigateToCourse(selectedCourse)}
-                                            className="flex items-center gap-3 text-brand-green font-black text-[10px] uppercase tracking-widest group"
-                                        >
-                                            Concluir Módulo
-                                            <div className="p-3 bg-brand-green/10 rounded-xl group-hover:bg-brand-green group-hover:text-white transition-all"><Check size={18} strokeWidth={3} /></div>
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* --- VIEW: LIBRARY --- */}
-                {viewMode === 'library' && (
-                    <div className="max-w-7xl mx-auto animate-in fade-in slide-in-from-bottom-8 duration-700 pb-32">
-                        <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-8 py-6 mb-12">
-                            <div className="animate-in slide-in-from-left-8 duration-700">
-                                <div className="flex items-center gap-4 mb-4">
-                                    <div className="w-14 h-14 bg-brand-blue rounded-[1.5rem] flex items-center justify-center text-white shadow-2xl shadow-brand-blue/30 rotate-3">
-                                        <Folder size={28} />
-                                    </div>
-                                    <p className="text-[10px] font-black text-brand-blue uppercase tracking-[0.3em] bg-brand-blue/10 px-4 py-2 rounded-full border border-brand-blue/10">Repositório Digital</p>
-                                </div>
-                                <h1 className="text-4xl md:text-5xl font-black tracking-tight text-slate-900 leading-tight">Biblioteca</h1>
-                                <p className="text-slate-400 font-medium text-lg italic mt-2">Acesso a manuais, diretrizes e recursos essenciais.</p>
-                            </div>
-
-                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 animate-in slide-in-from-right-8 duration-700">
-                                <div className="relative group min-w-[280px]">
-                                    <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-brand-blue transition-all" size={20} />
-                                    <input 
-                                        type="text" 
-                                        placeholder="Buscar documento..." 
-                                        className="w-full pl-14 pr-8 py-4 bg-white rounded-[1.8rem] border border-slate-100 shadow-sm outline-none focus:ring-4 focus:ring-brand-blue/10 focus:border-brand-blue font-bold text-sm transition-all"
-                                        value={searchTerm}
-                                        onChange={(e) => setSearchTerm(e.target.value)}
-                                    />
-                                </div>
-                            </div>
-                        </header>
-
-                        {documents.length === 0 ? (
-                            <div className="text-center py-32 bg-white rounded-[3rem] border border-slate-50 shadow-sm animate-in zoom-in-95">
-                                <div className="w-24 h-24 bg-slate-50 rounded-[2.5rem] flex items-center justify-center mx-auto mb-6 shadow-inner ring-4 ring-white">
-                                    <Folder size={40} className="text-slate-200" />
-                                </div>
-                                <h3 className="text-xl font-black text-slate-800 tracking-tight">Biblioteca Vazia</h3>
-                                <p className="text-slate-400 text-sm mt-2 max-w-xs mx-auto">Nenhum documento disponível no momento.</p>
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                                {documents.filter(doc => doc.title.toLowerCase().includes(searchTerm.toLowerCase())).map(doc => (
-                                    <motion.div 
-                                        key={doc.id}
-                                        whileHover={{ y: -8 }}
-                                        className="bg-white rounded-[2.5rem] border border-slate-100 shadow-[0_12px_24px_-10px_rgba(0,0,0,0.05)] p-8 group flex flex-col items-center text-center hover:shadow-[0_24px_48px_-12px_rgba(0,0,0,0.1)] transition-all duration-500 hover:border-brand-blue/20"
-                                    >
-                                        <div className="w-20 h-20 bg-slate-50 rounded-[1.8rem] flex items-center justify-center mb-6 group-hover:bg-brand-blue/5 transition-all relative overflow-hidden group-hover:scale-110">
-                                            <div className="absolute top-0 right-0 w-8 h-8 bg-brand-blue/10 rounded-full blur-xl scale-0 group-hover:scale-150 transition-transform duration-700"></div>
-                                            <FileText size={32} className="text-slate-300 group-hover:text-brand-blue transition-colors" />
-                                        </div>
-                                        <h3 className="font-black text-slate-800 text-base tracking-tight mb-2 line-clamp-2 leading-tight h-12">{doc.title}</h3>
-                                        <div className="flex items-center gap-3 mb-8">
-                                            <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{doc.category || 'Recursos'}</span>
-                                            <div className="w-1 h-1 bg-slate-200 rounded-full"></div>
-                                            <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">PDF</span>
-                                        </div>
-                                        <a 
-                                            href={doc.url} 
-                                            target="_blank" 
-                                            rel="noopener noreferrer"
-                                            className="w-full bg-slate-50 text-slate-900 group-hover:bg-brand-blue group-hover:text-white py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm hover:shadow-lg flex items-center justify-center gap-2"
-                                        >
-                                            <Download size={14} className="group-hover:translate-y-1 transition-transform" /> Baixar
-                                        </a>
-                                    </motion.div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
-        </div>
-
-        {/* MODALS RE-IMPLEMENTED FOR CONSISTENCY AND BEAUTY */}
-        
-        {/* PORTALED MODALS */}
-        {createPortal(
-            <AnimatePresence>
-                {/* Modal: Novo Curso */}
-                {isCourseModalOpen && (
-                    <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
-                        <motion.div 
-                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                            className="absolute inset-0 bg-slate-950/60 backdrop-blur-xl" 
-                            onClick={() => setIsCourseModalOpen(false)} 
-                        />
-                        <motion.div 
-                            initial={{ scale: 0.95, opacity: 0, y: 30 }}
-                            animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.95, opacity: 0, y: 30 }}
-                            className="bg-white w-full max-w-xl rounded-[3rem] shadow-2xl relative z-[1010] overflow-hidden flex flex-col max-h-[90vh]"
-                        >
-                            <div className="px-10 py-10 border-b border-slate-50 flex justify-between items-center bg-slate-900 relative group/course">
-                                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
-                                <div className="flex items-center gap-6 relative z-10">
-                                    <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center text-white border border-white/10 shadow-lg group-hover/course:rotate-12 duration-500">
-                                        <BookOpen size={32} />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-3xl font-black text-white tracking-tighter leading-none mb-1">{editingCourseId ? 'Editar Curso' : 'Criar Novo Curso'}</h3>
-                                        <p className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">Gestão de Aprendizado</p>
-                                    </div>
-                                </div>
-                                <button onClick={() => setIsCourseModalOpen(false)} className="p-4 bg-white/10 text-white/50 hover:text-white rounded-[1.5rem] border border-white/5 backdrop-blur-md transition-all active:scale-90 relative z-10">
-                                    <X size={24} strokeWidth={3} />
-                                </button>
-                            </div>
-
-                            <div className="p-10 overflow-y-auto flex-1 space-y-8 hide-scroll">
-                                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Título do Curso *</label>
-                                    <input 
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm transition-all text-slate-900"
-                                        placeholder="Ex: Formação Missionária II"
-                                        value={courseFormData.title}
-                                        onChange={(e) => setCourseFormData({...courseFormData, title: e.target.value})}
-                                    />
-                                </div>
-                                <div className="space-y-4">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Categoria de Ensino</label>
-                                    <select 
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm appearance-none cursor-pointer"
-                                        value={courseFormData.category}
-                                        onChange={(e) => setCourseFormData({...courseFormData, category: e.target.value})}
-                                    >
-                                        <option value="Geral">Geral</option>
-                                        <option value="Espiritualidade">Espiritualidade</option>
-                                        <option value="Técnico">Técnico</option>
-                                        <option value="Liderança">Liderança</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-4">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Capa do Curso</label>
-                                    <div className="flex gap-4">
-                                        <div className="flex-1">
-                                            <input 
-                                                className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm transition-all"
-                                                placeholder="URL ou Upload..."
-                                                value={courseFormData.thumbnail}
-                                                onChange={(e) => setCourseFormData({...courseFormData, thumbnail: e.target.value})}
-                                            />
-                                        </div>
-                                        <button 
-                                            onClick={() => courseFileInputRef.current?.click()}
-                                            className="shrink-0 w-14 h-14 bg-white border border-slate-200 text-slate-400 hover:text-brand-blue hover:border-brand-blue rounded-2xl shadow-sm transition-all active:scale-95 flex items-center justify-center p-0"
-                                        >
-                                            <Camera size={24} />
-                                        </button>
-                                        <input type="file" ref={courseFileInputRef} className="hidden" accept="image/*" onChange={handleCourseImageSelect} />
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="p-10 bg-slate-50/50 border-t border-slate-100 flex justify-end gap-5 rounded-b-[3rem]">
-                                <button 
-                                    onClick={() => setIsCourseModalOpen(false)} 
-                                    className="px-8 py-5 text-slate-400 hover:text-slate-900 font-black text-[10px] uppercase tracking-widest transition-all"
-                                >
-                                    Cancelar
-                                </button>
-                                <button 
-                                    onClick={handleSaveCourse}
-                                    disabled={courseLoading || !courseFormData.title}
-                                    className="bg-slate-900 text-white px-10 py-5 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-2xl shadow-slate-200 hover:bg-brand-blue hover:scale-105 active:scale-95 transition-all disabled:opacity-70 flex items-center justify-center gap-3"
-                                >
-                                    {courseLoading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-                                    Confirmar Curso
-                                </button>
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
-
-                {/* Modal: Nova Aula */}
-                {isLessonModalOpen && (
-                    <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
-                        <motion.div 
-                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                            className="absolute inset-0 bg-slate-950/60 backdrop-blur-xl" 
-                            onClick={() => setIsLessonModalOpen(false)} 
-                        />
-                        <motion.div 
-                            initial={{ scale: 0.95, opacity: 0, y: 30 }}
-                            animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.95, opacity: 0, y: 30 }}
-                            className="bg-white w-full max-w-xl rounded-[3rem] shadow-2xl relative z-[1010] overflow-hidden flex flex-col max-h-[90vh]"
-                        >
-                            <div className="px-10 py-10 border-b border-slate-50 flex justify-between items-center bg-brand-blue relative group/lesson">
-                                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
-                                <div className="flex items-center gap-6 relative z-10">
-                                    <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center text-white border border-white/10 shadow-lg group-hover/lesson:rotate-12 duration-500">
-                                        <Plus size={32} strokeWidth={3} />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-3xl font-black text-white tracking-tighter leading-none mb-1">Nova Atividade</h3>
-                                        <p className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">Conteúdo Curricular</p>
-                                    </div>
-                                </div>
-                                <button onClick={() => setIsLessonModalOpen(false)} className="p-4 bg-white/10 text-white/50 hover:text-white rounded-[1.5rem] border border-white/5 backdrop-blur-md transition-all active:scale-90 relative z-10">
-                                    <X size={24} strokeWidth={3} />
-                                </button>
-                            </div>
-
-                            <div className="p-10 overflow-y-auto flex-1 space-y-8 hide-scroll">
-                                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Título da Atividade *</label>
-                                    <input 
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm transition-all text-slate-900"
-                                        placeholder="Ex: Introdução ao Canva"
-                                        value={lessonFormData.title}
-                                        onChange={(e) => setLessonFormData({...lessonFormData, title: e.target.value})}
-                                    />
-                                </div>
-                                <div className="space-y-4">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">URL / Embed (YouTube/Vimeo) *</label>
-                                    <input 
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm text-xs transition-all text-slate-900"
-                                        placeholder="Cole a URL ou código iframe"
-                                        value={lessonFormData.videoUrl}
-                                        onChange={(e) => setLessonFormData({...lessonFormData, videoUrl: e.target.value})}
-                                    />
-                                </div>
-                                <div className="grid grid-cols-2 gap-6">
-                                    <div className="space-y-4">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Duração</label>
-                                        <input 
-                                            className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm transition-all text-slate-900"
-                                            placeholder="Ex: 15 min"
-                                            value={lessonFormData.duration}
-                                            onChange={(e) => setLessonFormData({...lessonFormData, duration: e.target.value})}
-                                        />
-                                    </div>
-                                </div>
-                                <div className="space-y-4">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Descrição Breve</label>
-                                    <textarea 
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm transition-all min-h-[120px] resize-none text-slate-900"
-                                        placeholder="O que será abordado?"
-                                        value={lessonFormData.description}
-                                        onChange={(e) => setLessonFormData({...lessonFormData, description: e.target.value})}
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="p-10 bg-slate-50/50 border-t border-slate-100 flex justify-end items-center rounded-b-[3rem]">
-                                <button 
-                                    onClick={handleSaveLesson}
-                                    disabled={lessonLoading || !lessonFormData.title}
-                                    className="bg-slate-900 text-white px-10 py-5 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-2xl shadow-slate-200 hover:bg-brand-blue hover:scale-105 active:scale-95 transition-all disabled:opacity-70 flex items-center justify-center gap-3"
-                                >
-                                    {lessonLoading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-                                    Publicar Atividade
-                                </button>
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
-
-                {/* Modal: Confirmação de Exclusão */}
-                {lessonToDelete && (
-                    <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
-                        <motion.div 
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="absolute inset-0 bg-slate-950/60 backdrop-blur-xl"
-                            onClick={() => setLessonToDelete(null)}
-                        />
-                        <motion.div 
-                            initial={{ scale: 0.95, opacity: 0, y: 30 }}
-                            animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.95, opacity: 0, y: 30 }}
-                            className="bg-white max-w-sm w-full rounded-[3rem] p-10 relative z-[1010] text-center shadow-2xl"
-                        >
-                            <div className="w-24 h-24 bg-rose-50 text-rose-500 rounded-[2.5rem] flex items-center justify-center mx-auto mb-8 shadow-xl shadow-rose-100">
-                                <AlertTriangle size={40} />
-                            </div>
-                            <h3 className="text-2xl font-black text-slate-900 tracking-tight mb-4">Excluir atividade?</h3>
-                            <p className="text-slate-400 text-sm font-medium mb-10 leading-relaxed px-4 italic">Esta ação não poderá ser revertida nos servidores.</p>
-                            <div className="flex gap-4">
-                                <button onClick={() => setLessonToDelete(null)} className="flex-1 py-5 bg-slate-100 text-slate-400 hover:text-slate-800 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all">Manter</button>
-                                <button onClick={confirmDeleteLesson} className="flex-1 py-5 bg-rose-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-rose-200 transition-all active:scale-95">{isDeleteLoading ? '...' : 'Excluir'}</button>
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
-
-                {/* Modal: Novo Tópico Fórum */}
-                {isTopicModalOpen && (
-                    <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
-                        <motion.div 
-                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                            className="absolute inset-0 bg-slate-950/60 backdrop-blur-xl" 
-                            onClick={() => setIsTopicModalOpen(false)} 
-                        />
-                        <motion.div 
-                            initial={{ scale: 0.95, opacity: 0, y: 30 }}
-                            animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.95, opacity: 0, y: 30 }}
-                            className="bg-white w-full max-w-xl rounded-[3rem] shadow-2xl relative z-[1010] overflow-hidden flex flex-col max-h-[90vh]"
-                        >
-                            <div className="px-10 py-10 border-b border-slate-50 flex justify-between items-center bg-slate-800 relative group/topic">
-                                <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 pointer-events-none" />
-                                <div className="flex items-center gap-6 relative z-10">
-                                    <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center text-white border border-white/10 shadow-lg group-hover/topic:rotate-12 duration-500">
-                                        <MessageCircle size={32} />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-3xl font-black text-white tracking-tighter leading-none mb-1">Novo Tópico</h3>
-                                        <p className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">Diálogo e Partilha</p>
-                                    </div>
-                                </div>
-                                <button onClick={() => setIsTopicModalOpen(false)} className="p-4 bg-white/10 text-white/50 hover:text-white rounded-[1.5rem] border border-white/5 backdrop-blur-md transition-all active:scale-90 relative z-10">
-                                    <X size={24} strokeWidth={3} />
-                                </button>
-                            </div>
-
-                            <div className="p-10 overflow-y-auto flex-1 space-y-8 hide-scroll">
-                                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Assunto / Título *</label>
-                                    <input 
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm transition-all text-slate-900"
-                                        placeholder="Ex: Dúvida sobre a ferramenta X"
-                                        value={topicFormData.title}
-                                        onChange={(e) => setTopicFormData({...topicFormData, title: e.target.value})}
-                                    />
-                                </div>
-                                <div className="space-y-4">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Sua Mensagem *</label>
-                                    <textarea 
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-[1.5rem] px-6 py-4 outline-none focus:ring-8 focus:ring-brand-blue/5 focus:border-brand-blue font-bold text-sm transition-all min-h-[160px] resize-none text-slate-900"
-                                        placeholder="Escreva sua pergunta ou partilha aqui..."
-                                        value={topicFormData.content}
-                                        onChange={(e) => setTopicFormData({...topicFormData, content: e.target.value})}
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="p-10 bg-slate-50/50 border-t border-slate-100 flex justify-end items-center rounded-b-[3rem]">
-                                <button 
-                                    onClick={() => setIsTopicModalOpen(false)} 
-                                    className="px-8 py-5 text-slate-400 hover:text-slate-900 font-black text-[10px] uppercase tracking-widest transition-all"
-                                >
-                                    Cancelar
-                                </button>
-                                <button 
-                                    onClick={handleCreateTopic}
-                                    disabled={forumLoading || !topicFormData.title || !topicFormData.content}
-                                    className="bg-slate-900 text-white px-10 py-5 rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-2xl shadow-slate-200 hover:bg-brand-blue hover:scale-105 active:scale-95 transition-all disabled:opacity-70 flex items-center justify-center gap-3"
-                                >
-                                    {forumLoading ? <Loader2 size={18} className="animate-spin" /> : <MessageCircle size={18} />}
-                                    Publicar no Mural
-                                </button>
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>,
-            document.body
+                  <CertificateView 
+                    certificate={validatedCertificate} 
+                    onClose={clearUrlVerification} 
+                  />
+                </div>
+              ) : (
+                <div className="py-8 text-center">
+                  <p className="text-xs font-bold text-red-500">Credencial com este ID de verificação não encontrada ou inválida.</p>
+                </div>
+              )}
+            </motion.div>
+          </div>,
+          document.body
         )}
+      </AnimatePresence>
+
+      {/* 3. CORE SUBROUTING CONTAINER */}
+      <div className={`px-3 md:px-6 lg:px-8 pt-2 pb-2 ${viewMode === 'student_dashboard' && !activeCourse ? 'w-full' : 'lg:flex-1 lg:min-h-0 lg:flex lg:flex-col lg:overflow-hidden'}`}>
+        <AnimatePresence mode="wait">
+          
+          {/* A. STUDENT DASHBOARD */}
+          {viewMode === 'student_dashboard' && !activeCourse && (
+            <div
+              key="view-student-dash"
+              className="transition-opacity duration-300 animate-in fade-in"
+            >
+              <StudentDashboard
+                courses={courses}
+                currentUser={currentUser}
+                users={users}
+                onSelectCourse={(course) => {
+                  setActiveCourse(course);
+                  setViewMode('classroom');
+                }}
+                onViewCertificate={(cert) => triggerDirectCertificatePrint(cert)}
+                onRefresh={onRefresh}
+              />
+            </div>
+          )}
+
+          {/* B. VIRTUAL HIGH FIDELITY CLASSROOM */}
+          {viewMode === 'classroom' && activeCourse && (
+            <div
+              key="view-classroom-panel"
+              className="transition-opacity duration-300 animate-in fade-in lg:h-full lg:max-h-full lg:flex lg:flex-col lg:min-h-0"
+            >
+              <CourseClassroom
+                course={activeCourse}
+                currentUser={currentUser}
+                onBack={() => {
+                  setActiveCourse(null);
+                  setViewMode('student_dashboard');
+                }}
+                onRefresh={onRefresh}
+              />
+            </div>
+          )}
+
+          {/* C. COORDINATORS AND INSTRUCTORS DASHBOARD */}
+          {viewMode === 'instructor_dashboard' && isInstructor && (
+            <div
+              key="view-instructor-dash"
+              className="transition-opacity duration-300 animate-in fade-in lg:h-full lg:max-h-full lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden"
+            >
+              <InstructorDashboard
+                courses={courses}
+                users={users}
+                onRefresh={onRefresh}
+              />
+            </div>
+          )}
+
+        </AnimatePresence>
+      </div>
+
+      {/* 4. OVERLAY DETAILED DIPLOMA VIEW CARD */}
+      <AnimatePresence>
+        {viewerCertificate && createPortal(
+          <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-[9999] overflow-y-auto flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-[3.5rem] p-6 md:p-8 max-w-5xl w-full border border-slate-100 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200"
+            >
+              <button 
+                onClick={() => setViewerCertificate(null)}
+                className="absolute top-6 right-6 p-2 rounded-full hover:bg-slate-50 transition-colors text-slate-400 hover:text-slate-900 cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+
+              <CertificateView 
+                certificate={viewerCertificate} 
+                onClose={() => setViewerCertificate(null)} 
+              />
+            </motion.div>
+          </div>,
+          document.body
+        )}
+      </AnimatePresence>
+
     </div>
   );
 };
