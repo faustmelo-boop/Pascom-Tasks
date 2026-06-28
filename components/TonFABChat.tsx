@@ -305,14 +305,14 @@ ${groundingContext}
 
     // 2. Client-side fallback if server fails
     if (!serverSuccess) {
-      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.GEMINI_API_KEY;
       if (!apiKey) {
         setIsLoading(false);
         setMessages(prev => [
           ...prev,
           {
             role: 'model',
-            content: `⚠️ **Chave API do Gemini não configurada**\n\nComo esta versão está sendo executada em uma hospedagem estática (como o GitHub Pages) sem servidor ativo, o assistente necessita que a variável de ambiente \`VITE_GEMINI_API_KEY\` esteja configurada no ambiente de publicação para responder diretamente no seu navegador.`
+            content: `⚠️ **Chave API do Gemini não encontrada**\n\nComo esta versão está sendo executada em uma hospedagem estática (como o GitHub Pages/Vercel) sem servidor ativo, o assistente necessita que a variável de ambiente \`GEMINI_API_KEY\` ou \`VITE_GEMINI_API_KEY\` esteja configurada no ambiente de publicação/build para responder diretamente no seu navegador.\n\n*Nota: Se você adicionou a variável agora, lembre-se de disparar um novo deploy (Redeploy) na plataforma de hospedagem para que o Vite compile a aplicação com a nova chave.*`
           }
         ]);
         return;
