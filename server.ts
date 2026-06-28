@@ -281,6 +281,16 @@ ${groundingContext}
 
 // Vite & Static Asset Handling
 async function setupServer() {
+  // Explicitly serve manifest.json and sw.js from the root directory
+  app.get("/manifest.json", (req, res) => {
+    res.sendFile(path.resolve(process.cwd(), "manifest.json"));
+  });
+
+  app.get("/sw.js", (req, res) => {
+    res.setHeader("Content-Type", "application/javascript");
+    res.sendFile(path.resolve(process.cwd(), "sw.js"));
+  });
+
   if (process.env.NODE_ENV !== "production") {
     console.log("Starting server in DEVELOPMENT mode with Vite Middleware...");
     const vite = await createViteServer({

@@ -178,24 +178,35 @@ function App() {
   }, []);
 
   // System Notification Logic
-  const requestSystemNotificationPermission = useCallback(async () => {
-    if (!('Notification' in window)) return;
-    
-    if (Notification.permission === 'default') {
-      try {
-        await Notification.requestPermission();
-      } catch (e) {
-        console.warn("Notification permission request failed", e);
+  const [showPermissionBanner, setShowPermissionBanner] = useState(false);
+
+  // Auto-detect if user has not yet decided about notifications and show a non-modal inline prompt
+  useEffect(() => {
+    if ('Notification' in window) {
+      const permission = Notification.permission;
+      const dismissed = sessionStorage.getItem('pascom_notif_banner_dismissed');
+      if (permission === 'default' && !dismissed) {
+        setShowPermissionBanner(true);
       }
     }
   }, []);
 
-  // Auto-detect and ask for browser notification permission on load
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      requestSystemNotificationPermission();
+  const requestSystemNotificationPermission = useCallback(async () => {
+    if (!('Notification' in window)) return;
+    
+    try {
+      const permission = await Notification.requestPermission();
+      setShowPermissionBanner(false);
+      return permission;
+    } catch (e) {
+      console.warn("Notification permission request failed", e);
     }
-  }, [requestSystemNotificationPermission]);
+  }, []);
+
+  const handleDismissPermissionBanner = () => {
+    sessionStorage.setItem('pascom_notif_banner_dismissed', 'true');
+    setShowPermissionBanner(false);
+  };
 
   const sendSystemNotification = async (title: string, body: string) => {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -203,7 +214,7 @@ function App() {
     try {
       // Prioridade: Service Worker (para mobile/PWA e background)
       if ('serviceWorker' in navigator) {
-          const registration = await navigator.serviceWorker.getRegistration('./');
+          const registration = await navigator.serviceWorker.ready;
           if (registration && registration.showNotification) {
               await registration.showNotification(title, {
                   body: body,
@@ -674,6 +685,42 @@ function App() {
           ref={scrollRef}
           className={`flex-1 pt-1 pb-12 hide-scroll transition-all duration-700 overflow-y-auto ${loading ? 'blur-xl grayscale opacity-50 scale-[0.98]' : 'blur-0 grayscale-0 opacity-100 scale-100'}`}
         >
+        <AnimatePresence>
+          {showPermissionBanner && (
+            <motion.div
+              initial={{ opacity: 0, height: 0, y: -20 }}
+              animate={{ opacity: 1, height: "auto", y: 0 }}
+              exit={{ opacity: 0, height: 0, y: -20 }}
+              className="bg-brand-blue/10 border-b border-brand-blue/20 px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 z-40 shrink-0 shadow-xs overflow-hidden"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-brand-blue text-white rounded-xl flex items-center justify-center shrink-0 shadow-md shadow-brand-blue/10">
+                  <Bell size={18} className="animate-bounce text-brand-yellow" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-brand-blue uppercase tracking-wider">Ativar Notificações no Navegador</h4>
+                  <p className="text-[11px] text-slate-600 font-semibold mt-0.5">
+                    Receba avisos instantâneos de escalas de transmissão e tarefas da Paróquia de Santo Antônio - Arquidiocese de Natal.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-end sm:self-center">
+                <button
+                  onClick={handleDismissPermissionBanner}
+                  className="px-4 py-2 text-[10px] font-black uppercase text-slate-500 hover:text-slate-800 tracking-wider transition-colors cursor-pointer"
+                >
+                  Agora Não
+                </button>
+                <button
+                  onClick={requestSystemNotificationPermission}
+                  className="bg-brand-blue hover:bg-brand-blue/90 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider shadow-md shadow-brand-blue/20 hover:shadow-lg transition-all active:scale-95 cursor-pointer"
+                >
+                  Ativar Notificações
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
           <div className="max-w-7xl mx-auto md:px-6 w-full">
             <AnimatePresence mode="wait">
               <motion.div
