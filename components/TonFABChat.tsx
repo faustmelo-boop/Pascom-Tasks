@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, SendHorizontal, X, Sparkles, Calendar, ClipboardCheck, ArrowUpRight, Eraser } from 'lucide-react';
+import { MessageSquare, SendHorizontal, X, Sparkles, Calendar, ClipboardCheck, ArrowUpRight, Eraser, Key } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User, Task, ScheduleEvent } from '../types';
+import { GoogleGenAI } from '@google/genai';
 
 // Let's import the user-approved TonAvatar image component or just define one using the fresh avatar URL
 const TON_AVATAR_URL = "https://i.imgur.com/09S3lJS.png";
@@ -93,6 +94,11 @@ export const TonFABChat: React.FC<TonFABChatProps> = ({ currentUser, tasks, sche
   const [isLoading, setIsLoading] = useState(false);
   const [showBadge, setShowBadge] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Client-side Gemini API key states for static site hosting (GitHub Pages / Vercel fallback)
+  const [needsApiKey, setNeedsApiKey] = useState(false);
+  const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem("pascom_user_gemini_key") || "");
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
 
   // Auto-dismiss the helper preview bubble 3 seconds after page load
   useEffect(() => {
@@ -231,6 +237,41 @@ export const TonFABChat: React.FC<TonFABChatProps> = ({ currentUser, tasks, sche
     }
   ];
 
+  // System Prompt for Client-Side Fallback
+  const getSystemPrompt = () => {
+    let groundingContext = "Nenhum material adicional foi cadastrado para grounding neste curso por enquanto. Responda amigavelmente com base nas diretrizes gerais pastorais e conhecimentos teológicos adequados.";
+    if (referenceMaterials && Array.isArray(referenceMaterials) && referenceMaterials.length > 0) {
+      groundingContext = referenceMaterials.map((mat: any, idx: number) => {
+        let matStr = `[Material #${idx + 1}] Título: ${mat.title} | Tipo: ${mat.type}`;
+        if (mat.url && mat.url !== '#') {
+          matStr += ` | URL/Link: ${mat.url}`;
+        }
+        if (mat.metadata?.codeSnippet) {
+          matStr += `\nConteúdo Textual de Referência:\n"""\n${mat.metadata.codeSnippet}\n"""`;
+        }
+        return matStr;
+      }).join("\n\n---\n\n");
+    }
+
+    return `Você é o "Ton", um assistente de inteligência artificial amigável, acolhedor e especialista no conteúdo deste curso da Pascom.
+Sua missão é responder às dúvidas dos alunos com clareza, paciência, serenidade e uma didática exemplar.
+
+DIRETRIZES IMPORTANTES DE COMPORTAMENTO:
+1. Sempre se identifique como "Ton", o auxiliar do aluno.
+2. Mantenha uma conduta humilde, acolhedora, pastoral e prestativa. Pode usar saudações fraternas condizentes (como "Paz de Cristo", "Saudações fraternas", ou "Paz e Bem!") apenas na primeira mensagem da interação.
+3. NÃO repita saudações, apresentações, saudações diárias, ou palavras de boas-vindas (ex: "Paz e Bem", "Seja bem-vindo de volta", "Eu sou o Ton") nas mensagens seguintes / subsequentes da conversa. Responda diretamente e amigavelmente à dúvida do usuário sem enrolações ou repetição de introdução.
+4. Use prioritariamente os MATERIAIS DE CONSULTA ATRELADOS AO CURSO listados abaixo. Se a dúvida puder ser esclarecida usando esses documentos, fundamente neles sua resposta.
+5. Caso o assunto não esteja presente nestes materiais de referência, responda utilizando seu vasto repertório teológico católico, pastoral, pedagógico e de comunicação da Igreja (Pascom/Vaticano II/etc.), informando gentilmente o aluno com clareza.
+6. Nunca invente fatos ou elabore URLs fictícias.
+7. Formate sua resposta de maneira excelente usando Markdown (tópicos, negritos, cabeçalhos simples) para facilitar a leitura.
+
+MATERIAIS DE CONSULTA DISPONIBILIZADOS PELO MINISTRANTE:
+=========================================
+${groundingContext}
+=========================================
+`;
+  };
+
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputVal.trim() || isLoading) return;
@@ -242,6 +283,10 @@ export const TonFABChat: React.FC<TonFABChatProps> = ({ currentUser, tasks, sche
     setInputVal('');
     setIsLoading(true);
 
+    let serverSuccess = false;
+    let replyText = "";
+
+    // 1. Try server-side first
     try {
       const response = await fetch("/api/gemini/ton-chat", {
         method: "POST",
@@ -252,26 +297,96 @@ export const TonFABChat: React.FC<TonFABChatProps> = ({ currentUser, tasks, sche
         })
       });
 
-      if (!response.ok) {
-        throw new Error("Erro de rede ao falar com o assistente.");
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.reply) {
+          replyText = data.reply;
+          serverSuccess = true;
+        }
+      }
+    } catch (serverErr) {
+      console.warn("Server Ton Chat failed or returned error, trying client-side fallback...", serverErr);
+    }
+
+    // 2. Client-side fallback if server fails
+    if (!serverSuccess) {
+      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || localStorage.getItem("pascom_user_gemini_key");
+      if (!apiKey) {
+        setNeedsApiKey(true);
+        setShowApiKeyInput(true);
+        setIsLoading(false);
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'model',
+            content: `🔑 **Chave API do Gemini Necessária**\n\nComo esta versão está sendo executada em uma hospedagem estática (ex: GitHub Pages), precisamos de uma chave de API do Gemini para que o Ton possa te responder diretamente do seu navegador.\n\nPor favor, insira sua chave abaixo para continuar. Ela é salva com total segurança apenas localmente em seu próprio navegador.`
+          }
+        ]);
+        return;
       }
 
-      const data = await response.json();
-      if (data.success && data.reply) {
-        setMessages(prev => [...prev, { role: 'model', content: data.reply }]);
-      } else {
-        throw new Error(data.error || "Erro ao processar mensagem do Ton.");
-      }
-    } catch (err: any) {
-      console.error(err);
-      setMessages(prev => [
-        ...prev, 
-        { 
-          role: 'model', 
-          content: `⚠️ Desculpe-me, tive um pequeno problema ao processar seu pedido. Mas me diga, deseja tentar novamente?` 
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const systemPrompt = getSystemPrompt();
+        
+        const messagesSlice = updatedMessages.slice(-15);
+        const contentsPayload = messagesSlice.map((m: any) => {
+          const role = m.role === 'model' || m.role === 'assistant' ? 'model' : 'user';
+          return {
+            role: role,
+            parts: [{ text: m.content || "" }]
+          };
+        });
+
+        const candidateModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.5-flash"];
+        let clientSuccess = false;
+        let lastError: any = null;
+
+        for (const model of candidateModels) {
+          try {
+            const result = await ai.models.generateContent({
+              model: model,
+              contents: contentsPayload,
+              config: {
+                systemInstruction: systemPrompt,
+                temperature: 0.7,
+              }
+            });
+
+            if (result?.text) {
+              replyText = result.text;
+              clientSuccess = true;
+              break;
+            }
+          } catch (modelErr) {
+            lastError = modelErr;
+            console.warn(`[Client Ton Chat] Erro com o modelo ${model}:`, modelErr);
+          }
         }
-      ]);
-    } finally {
+
+        if (clientSuccess) {
+          setMessages(prev => [...prev, { role: 'model', content: replyText }]);
+        } else {
+          throw lastError || new Error("Não foi possível obter resposta de nenhum modelo Gemini do lado do cliente.");
+        }
+      } catch (err: any) {
+        console.error(err);
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'model',
+            content: `⚠️ Não consegui processar sua mensagem. Verifique se sua chave API do Gemini é válida ou tente novamente. Erro: ${err.message || err}`
+          }
+        ]);
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // 3. If server-side was successful
+    if (serverSuccess) {
+      setMessages(prev => [...prev, { role: 'model', content: replyText }]);
       setIsLoading(false);
     }
   };
@@ -367,6 +482,16 @@ export const TonFABChat: React.FC<TonFABChatProps> = ({ currentUser, tasks, sche
               
               <div className="flex items-center gap-1">
                 <button 
+                  onClick={() => {
+                    setShowApiKeyInput(!showApiKeyInput);
+                    setUserApiKey(localStorage.getItem("pascom_user_gemini_key") || "");
+                  }} 
+                  title="Configurar Chave API do Gemini" 
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${showApiKeyInput ? 'bg-white/20 text-white' : 'text-white/75 hover:text-white hover:bg-white/10'}`}
+                >
+                  <Key size={16} />
+                </button>
+                <button 
                   onClick={cleanConversation} 
                   title="Limpar Conversa" 
                   className="p-1.5 rounded-lg text-white/75 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
@@ -384,6 +509,83 @@ export const TonFABChat: React.FC<TonFABChatProps> = ({ currentUser, tasks, sche
 
             {/* Conversation Window Body */}
             <div className="flex-1 overflow-y-auto p-4 bg-slate-50/50 space-y-3.5">
+              {showApiKeyInput && (
+                <div className="p-4 bg-amber-50/90 backdrop-blur-xs rounded-2xl border border-amber-200/60 shadow-xs space-y-3 shrink-0">
+                  <div className="flex gap-2 items-start">
+                    <Key size={18} className="text-amber-600 mt-0.5" />
+                    <div className="flex-1">
+                      <h4 className="text-xs font-bold text-amber-900">Chave API do Gemini do Cliente</h4>
+                      <p className="text-[10px] text-amber-800 leading-normal mt-1">
+                        Para o Ton responder quando publicado no GitHub Pages / Vercel, use sua própria chave do Gemini. Ela é salva de forma segura apenas no seu navegador.
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <input
+                      type="password"
+                      value={userApiKey}
+                      onChange={(e) => setUserApiKey(e.target.value)}
+                      placeholder="Cole sua API Key aqui (AIzaSy...)"
+                      className="w-full bg-white border border-amber-200 text-xs py-2 px-3 rounded-xl focus:outline-hidden focus:border-amber-500 text-slate-800 placeholder-slate-400 font-mono"
+                    />
+                    <div className="flex justify-between items-center gap-2">
+                      <a 
+                        href="https://aistudio.google.com/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-amber-700 font-bold hover:underline"
+                      >
+                        Obter chave grátis ↗
+                      </a>
+                      <div className="flex gap-2">
+                        {localStorage.getItem("pascom_user_gemini_key") && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              localStorage.removeItem("pascom_user_gemini_key");
+                              setUserApiKey("");
+                              setNeedsApiKey(false);
+                              setShowApiKeyInput(false);
+                              setMessages(prev => [
+                                ...prev,
+                                {
+                                  role: 'model',
+                                  content: `🗑️ **Chave de API removida.** O Ton agora tentará utilizar o servidor padrão.`
+                                }
+                              ]);
+                            }}
+                            className="px-2.5 py-1.5 text-[10px] font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition-all"
+                          >
+                            Remover
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (userApiKey.trim()) {
+                              localStorage.setItem("pascom_user_gemini_key", userApiKey.trim());
+                              setNeedsApiKey(false);
+                              setShowApiKeyInput(false);
+                              setMessages(prev => [
+                                ...prev,
+                                {
+                                  role: 'model',
+                                  content: `✅ **Chave de API configurada com sucesso!** Agora o Ton responderá usando sua chave direto no navegador.`
+                                }
+                              ]);
+                            }
+                          }}
+                          className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all"
+                        >
+                          Salvar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {messages.map((m, idx) => {
                 const isUser = m.role === 'user';
                 return (
