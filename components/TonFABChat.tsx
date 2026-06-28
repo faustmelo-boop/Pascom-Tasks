@@ -305,7 +305,8 @@ ${groundingContext}
 
     // 2. Client-side fallback if server fails
     if (!serverSuccess) {
-      const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY || (import.meta as any).env?.GEMINI_API_KEY;
+      // @ts-ignore
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.GEMINI_API_KEY;
       if (!apiKey) {
         setIsLoading(false);
         setMessages(prev => [
